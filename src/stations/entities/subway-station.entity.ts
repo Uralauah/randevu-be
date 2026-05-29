@@ -28,7 +28,7 @@ export class SubwayStation {
     name: 'weight_grade',
     type: 'char',
     length: 1,
-    default: "'C'",
+    default: 'C',
   })
   weightGrade!: string;
 
