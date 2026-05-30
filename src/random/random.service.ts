@@ -65,6 +65,7 @@ export class RandomService {
         weightGrade: picked.arrivalStation.weightGrade,
         placeCount: picked.arrivalStation.placeCount,
         travelMinutes: picked.minTravelMinutes,
+        vibeText: picked.arrivalStation.vibeText,
         lines: picked.arrivalStation.stationLines.map((stationLine) => ({
           id: stationLine.line.id,
           name: stationLine.line.name,
