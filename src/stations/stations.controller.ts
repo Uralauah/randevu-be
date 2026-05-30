@@ -7,7 +7,7 @@ export class StationsController {
   constructor(private readonly stationsService: StationsService) {}
 
   @Get()
-  findAll(): Promise<SubwayStation[]> {
+  findAll() {
     return this.stationsService.findAll();
   }
 

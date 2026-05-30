@@ -33,8 +33,31 @@ export class StationsService {
     private readonly travelTimeCacheRepository: Repository<TravelTimeCache>,
   ) {}
 
-  findAll(): Promise<SubwayStation[]> {
-    return this.stationRepository.find();
+  async findAll() {
+    const stations = await this.stationRepository.find({
+      relations: {
+        stationLines: {
+          line: true,
+        },
+      },
+      order: {
+        id: 'ASC',
+      },
+    });
+
+    return stations.map((station) => ({
+      id: station.id,
+      name: station.name,
+      lat: station.lat,
+      lng: station.lng,
+      weightGrade: station.weightGrade,
+      placeCount: station.placeCount,
+      lines: station.stationLines.map((stationLine) => ({
+        id: stationLine.line.id,
+        name: stationLine.line.name,
+        color: stationLine.line.color,
+      })),
+    }));
   }
 
   async rebuildTravelTimeCache() {
