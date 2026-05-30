@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -18,36 +19,46 @@ import { SubwayTransfer } from './stations/entities/subway-transfer.entity';
 import { TravelTimeCache } from './stations/entities/travel-time-cache.entity';
 import { StationsModule } from './stations/stations.module';
 import { RandomModule } from './random/random.module';
+import { PlacesModule } from './places/places.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forRoot({
-      type: 'postgres',
-      host: 'localhost',
-      port: 5432,
-      username: 'lsh',
-      password: 'asdf',
-      database: 'randevu',
-      entities: [
-        SocialAccount,
-        User,
-        EventLog,
-        PlaceRecommendation,
-        RandomResult,
-        ExcludedStationPresetItem,
-        ExcludedStationPreset,
-        SavedResult,
-        StationLine,
-        SubwayEdge,
-        SubwayLine,
-        SubwayStation,
-        SubwayTransfer,
-        TravelTimeCache,
-      ],
-      synchronize: true, // 개발 환경에서만 true로 설정하세요.
+    ConfigModule.forRoot({
+      isGlobal: true,
     }),
+
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        type: 'postgres',
+        host: configService.get<string>('DATABASE_HOST'),
+        port: configService.get<number>('DATABASE_PORT'),
+        username: configService.get<string>('DATABASE_USERNAME'),
+        password: configService.get<string>('DATABASE_PASSWORD'),
+        database: configService.get<string>('DATABASE_NAME'),
+        entities: [
+          SocialAccount,
+          User,
+          EventLog,
+          PlaceRecommendation,
+          RandomResult,
+          ExcludedStationPresetItem,
+          ExcludedStationPreset,
+          SavedResult,
+          StationLine,
+          SubwayEdge,
+          SubwayLine,
+          SubwayStation,
+          SubwayTransfer,
+          TravelTimeCache,
+        ],
+        synchronize: true,
+      }),
+    }),
+
     StationsModule,
     RandomModule,
+    PlacesModule,
   ],
   controllers: [AppController],
   providers: [AppService],
