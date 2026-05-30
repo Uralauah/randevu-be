@@ -1,10 +1,4 @@
-import {
-  Entity,
-  PrimaryColumn,
-  Column,
-  OneToMany,
-  Check,
-} from 'typeorm';
+import { Entity, PrimaryColumn, Column, OneToMany, Check } from 'typeorm';
 import { StationLine } from './station-line.entity';
 import { SubwayEdge } from './subway-edge.entity';
 import { SubwayTransfer } from './subway-transfer.entity';
@@ -46,4 +40,7 @@ export class SubwayStation {
 
   @OneToMany(() => SubwayTransfer, (t) => t.station)
   transfers!: SubwayTransfer[];
+
+  @Column({ name: 'vibe_text', type: 'varchar', length: 100, nullable: true })
+  vibeText!: string | null;
 }
