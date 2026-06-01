@@ -15,6 +15,14 @@ export class PlacesController {
     return this.placesService.findPlacesByStation(stationId, type, mealTime);
   }
 
+  @Get('stations/:stationId/place-recommendation')
+  recommendPlace(
+    @Param('stationId', ParseIntPipe) stationId: number,
+    @Query('date') date: string,
+  ) {
+    return this.placesService.recommendPlaceByStationAndDate(stationId, date);
+  }
+
   @Get('places/:placeKey')
   findPlaceDetail(@Param('placeKey') placeKey: string) {
     return this.placesService.findPlaceDetail(placeKey);

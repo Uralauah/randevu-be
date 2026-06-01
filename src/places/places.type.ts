@@ -26,6 +26,23 @@ export interface PlaceResponse {
   tagDetails?: PlaceTagResponse[];
 }
 
+export interface PlaceDateRecommendationResponse {
+  station: {
+    id: number;
+    name: string;
+    lat: number;
+    lng: number;
+  };
+  source: 'NAVER';
+  date: string;
+  recommendation: PlaceDateRecommendation;
+}
+
+export interface PlaceDateRecommendation extends PlaceResponse {
+  category: '식당' | '카페' | '놀거리';
+  reason: string;
+}
+
 export interface PlaceDetailResponse {
   placeKey: string;
   provider: 'NAVER' | 'KAKAO';

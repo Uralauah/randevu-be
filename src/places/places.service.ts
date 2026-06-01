@@ -13,6 +13,7 @@ import {
   MEAL_TIMES,
   PLACE_TYPES,
   MealTime,
+  PlaceDateRecommendationResponse,
   PlaceDetailResponse,
   PlaceResponse,
   PlaceType,
@@ -23,6 +24,14 @@ import { PlaceTagService } from './place-tag.service';
 
 interface CandidatePlace extends PlaceResponse {
   matchedQueries: string[];
+}
+
+interface DateRecommendationContext {
+  date: string;
+  month: number;
+  dayOfWeek: number;
+  isWeekend: boolean;
+  season: 'SPRING' | 'SUMMER' | 'FALL' | 'WINTER';
 }
 
 const RESPONSE_LIMIT_BY_TYPE: Record<PlaceType, number> = {
@@ -80,6 +89,93 @@ export class PlacesService {
       type,
       mealTime: type === 'RESTAURANT' ? (mealTime ?? null) : null,
       places,
+    };
+  }
+
+  async recommendPlaceByStationAndDate(
+    stationId: number,
+    date: string,
+  ): Promise<PlaceDateRecommendationResponse> {
+    const dateContext = this.parseDateRecommendationContext(date);
+    const station = await this.stationRepository.findOne({
+      where: { id: stationId },
+    });
+
+    if (!station) {
+      throw new NotFoundException('역을 찾을 수 없습니다.');
+    }
+
+    const recommendationGroups = await Promise.all(
+      PLACE_TYPES.map(async (type) => {
+        const baseQueries = this.buildSearchQueries(station.name, type).slice(
+          0,
+          3,
+        );
+        const dateQueries = this.buildDateRecommendationSearchQueries(
+          station.name,
+          type,
+          dateContext,
+        );
+        const candidates = await this.fetchNaverCandidates(
+          [...baseQueries, ...dateQueries],
+          type,
+        );
+
+        return this.rankPlaces(candidates, type).map((place) => ({
+          ...place,
+          recommendationScore:
+            (place.recommendationScore ?? 0) +
+            this.scorePlaceByDateContext(place, dateContext),
+        }));
+      }),
+    );
+
+    const recommendations = recommendationGroups
+      .flat()
+      .filter(
+        (place) =>
+          place.recommendationScore !== undefined &&
+          place.recommendationScore > 0,
+      )
+      .sort((a, b) => {
+        const scoreDiff =
+          (b.recommendationScore ?? 0) - (a.recommendationScore ?? 0);
+
+        if (scoreDiff !== 0) {
+          return scoreDiff;
+        }
+
+        return (
+          (b.matchedQueries?.length ?? 0) - (a.matchedQueries?.length ?? 0)
+        );
+      });
+
+    const recommendation = recommendations[0];
+
+    if (!recommendation) {
+      throw new NotFoundException('추천할 장소를 찾을 수 없습니다.');
+    }
+
+    await this.cachePlaces([recommendation]);
+
+    return {
+      station: {
+        id: station.id,
+        name: station.name,
+        lat: station.lat,
+        lng: station.lng,
+      },
+      source: 'NAVER',
+      date: dateContext.date,
+      recommendation: {
+        ...recommendation,
+        category: this.toPlaceCategoryLabel(recommendation.type),
+        reason: this.buildDateRecommendationReason(
+          recommendation,
+          station.name,
+          dateContext,
+        ),
+      },
     };
   }
 
@@ -231,6 +327,60 @@ export class PlacesService {
       `${base} 핫플`,
       `${base} 가볼만한 곳`,
     ];
+  }
+
+  private buildDateRecommendationSearchQueries(
+    stationName: string,
+    type: PlaceType,
+    dateContext: DateRecommendationContext,
+  ) {
+    const base = this.toSearchStationName(stationName);
+
+    if (dateContext.season === 'SUMMER') {
+      if (type === 'ACTIVITY') {
+        return [`${base} 실내 데이트`, `${base} 시원한 놀거리`];
+      }
+
+      if (type === 'CAFE') {
+        return [`${base} 빙수 카페`, `${base} 시원한 카페`];
+      }
+
+      return [`${base} 냉면 맛집`, `${base} 여름 맛집`];
+    }
+
+    if (dateContext.season === 'WINTER') {
+      if (type === 'ACTIVITY') {
+        return [`${base} 실내 놀거리`, `${base} 전시 데이트`];
+      }
+
+      if (type === 'CAFE') {
+        return [`${base} 따뜻한 카페`, `${base} 디저트 카페`];
+      }
+
+      return [`${base} 국물 맛집`, `${base} 겨울 맛집`];
+    }
+
+    if (dateContext.isWeekend) {
+      if (type === 'ACTIVITY') {
+        return [`${base} 주말 데이트`, `${base} 가볼만한 곳`];
+      }
+
+      if (type === 'CAFE') {
+        return [`${base} 주말 카페`, `${base} 데이트 카페`];
+      }
+
+      return [`${base} 주말 맛집`, `${base} 데이트 맛집`];
+    }
+
+    if (type === 'ACTIVITY') {
+      return [`${base} 가볍게 놀거리`, `${base} 데이트 코스`];
+    }
+
+    if (type === 'CAFE') {
+      return [`${base} 조용한 카페`, `${base} 분위기 좋은 카페`];
+    }
+
+    return [`${base} 저녁 맛집`, `${base} 점심 맛집`];
   }
 
   private toSearchStationName(stationName: string) {
@@ -397,6 +547,142 @@ export class PlacesService {
       tags: place.tags ?? [],
       tagDetails: place.tagDetails ?? [],
     };
+  }
+
+  private parseDateRecommendationContext(
+    date: string,
+  ): DateRecommendationContext {
+    if (!date) {
+      throw new BadRequestException('date는 필수입니다.');
+    }
+
+    const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (!match) {
+      throw new BadRequestException('date는 YYYY-MM-DD 형식이어야 합니다.');
+    }
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+
+    if (
+      parsed.getUTCFullYear() !== year ||
+      parsed.getUTCMonth() !== month - 1 ||
+      parsed.getUTCDate() !== day
+    ) {
+      throw new BadRequestException('유효한 날짜를 입력해주세요.');
+    }
+
+    const dayOfWeek = parsed.getUTCDay();
+
+    return {
+      date,
+      month,
+      dayOfWeek,
+      isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+      season: this.getSeason(month),
+    };
+  }
+
+  private getSeason(month: number): DateRecommendationContext['season'] {
+    if (month >= 3 && month <= 5) {
+      return 'SPRING';
+    }
+
+    if (month >= 6 && month <= 8) {
+      return 'SUMMER';
+    }
+
+    if (month >= 9 && month <= 11) {
+      return 'FALL';
+    }
+
+    return 'WINTER';
+  }
+
+  private scorePlaceByDateContext(
+    place: PlaceResponse,
+    dateContext: DateRecommendationContext,
+  ) {
+    const text = this.normalize(
+      `${place.name} ${place.categoryName} ${place.description} ${
+        place.matchedQueries?.join(' ') ?? ''
+      }`,
+    );
+    let score = 0;
+
+    if (dateContext.isWeekend) {
+      score += place.type === 'ACTIVITY' ? 18 : 8;
+    } else {
+      score += place.type === 'RESTAURANT' || place.type === 'CAFE' ? 12 : 6;
+    }
+
+    if (dateContext.season === 'SUMMER' || dateContext.season === 'WINTER') {
+      score += this.scoreByKeywords(text, INDOOR_COMFORT_KEYWORDS, 18);
+      score += place.type === 'CAFE' ? 8 : 0;
+      score += place.type === 'ACTIVITY' ? 6 : 0;
+      score -= this.scoreByKeywords(text, WEATHER_SENSITIVE_KEYWORDS, 14);
+    }
+
+    if (dateContext.season === 'SPRING' || dateContext.season === 'FALL') {
+      score += this.scoreByKeywords(text, WALKABLE_DATE_KEYWORDS, 14);
+      score += place.type === 'ACTIVITY' ? 10 : 0;
+    }
+
+    return score;
+  }
+
+  private buildDateRecommendationReason(
+    place: PlaceResponse,
+    stationName: string,
+    dateContext: DateRecommendationContext,
+  ) {
+    const dateReason = this.getShortDateReason(dateContext);
+    const typeReason = this.getShortTypeReason(place.type);
+
+    return `${this.toSearchStationName(stationName)} 근처에서 ${dateReason} ${typeReason} 좋아요.`;
+  }
+
+  private getShortDateReason(dateContext: DateRecommendationContext) {
+    if (dateContext.season === 'SUMMER') {
+      return '더운 날에도 부담 없이 머물기';
+    }
+
+    if (dateContext.season === 'WINTER') {
+      return '추운 날 실내에서 편하게 보내기';
+    }
+
+    if (dateContext.isWeekend) {
+      return '주말 데이트 코스로 들르기';
+    }
+
+    return '평일에 가볍게 들르기';
+  }
+
+  private getShortTypeReason(type: PlaceType) {
+    if (type === 'ACTIVITY') {
+      return '좋은 놀거리라';
+    }
+
+    if (type === 'CAFE') {
+      return '좋은 카페라';
+    }
+
+    return '좋은 식당이라';
+  }
+
+  private toPlaceCategoryLabel(type: PlaceType) {
+    if (type === 'RESTAURANT') {
+      return '식당';
+    }
+
+    if (type === 'CAFE') {
+      return '카페';
+    }
+
+    return '놀거리';
   }
 
   private rankPlaces(
@@ -760,6 +1046,37 @@ const ACTIVITY_KEYWORDS = [
   '산책',
   '문화',
   '체험',
+];
+
+const INDOOR_COMFORT_KEYWORDS = [
+  '실내',
+  '전시',
+  '미술관',
+  '박물관',
+  '갤러리',
+  '영화관',
+  '아쿠아리움',
+  '공방',
+  '카페',
+  '디저트',
+  '빙수',
+  '서점',
+  '편집샵',
+];
+
+const WEATHER_SENSITIVE_KEYWORDS = ['공원', '산책', '테라스', '루프탑', '야외'];
+
+const WALKABLE_DATE_KEYWORDS = [
+  '공원',
+  '산책',
+  '거리',
+  '시장',
+  '전시',
+  '갤러리',
+  '소품샵',
+  '편집샵',
+  '서점',
+  '테라스',
 ];
 
 const LUNCH_POSITIVE_KEYWORDS = [
