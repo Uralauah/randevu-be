@@ -5,46 +5,48 @@ import {
   Get,
   Param,
   Post,
-  Query,
+  UseGuards,
 } from '@nestjs/common';
+import { AccessTokenGuard } from '../auth/access-token.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
 import { DateCoursesService } from './date-courses.service';
 import { CreateDateCourseDto } from './dto/create-date-course.dto';
-import { AcceptDateCourseInviteDto } from './dto/accept-date-course-invite.dto';
 
 @Controller('date-courses')
+@UseGuards(AccessTokenGuard)
 export class DateCoursesController {
   constructor(private readonly dateCoursesService: DateCoursesService) {}
 
   @Post()
-  create(@Body() dto: CreateDateCourseDto) {
-    return this.dateCoursesService.create(dto);
+  create(@CurrentUser() user: CurrentUser, @Body() dto: CreateDateCourseDto) {
+    return this.dateCoursesService.create(user.id, dto);
   }
 
   @Get()
-  findAll(@Query('userId') userId: string) {
-    return this.dateCoursesService.findAll(userId);
+  findAll(@CurrentUser() user: CurrentUser) {
+    return this.dateCoursesService.findAll(user.id);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Query('userId') userId: string) {
-    return this.dateCoursesService.findOne(id, userId);
+  findOne(@CurrentUser() user: CurrentUser, @Param('id') id: string) {
+    return this.dateCoursesService.findOne(id, user.id);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string, @Query('userId') userId: string) {
-    return this.dateCoursesService.remove(id, userId);
+  remove(@CurrentUser() user: CurrentUser, @Param('id') id: string) {
+    return this.dateCoursesService.remove(id, user.id);
   }
 
   @Post(':id/invite')
-  createInvite(@Param('id') id: string, @Body('userId') userId: string) {
-    return this.dateCoursesService.createInvite(id, userId);
+  createInvite(@CurrentUser() user: CurrentUser, @Param('id') id: string) {
+    return this.dateCoursesService.createInvite(id, user.id);
   }
 
   @Post('invitations/:token/accept')
   acceptInvite(
+    @CurrentUser() user: CurrentUser,
     @Param('token') token: string,
-    @Body() dto: AcceptDateCourseInviteDto,
   ) {
-    return this.dateCoursesService.acceptInvite(token, dto.userId);
+    return this.dateCoursesService.acceptInvite(token, user.id);
   }
 }

@@ -20,7 +20,7 @@ export class SocialAccount {
   userId!: string;
 
   @Column({ type: 'varchar', length: 20 })
-  provider!: string; // KAKAO | GOOGLE | APPLE
+  provider!: string; // KAKAO | GOOGLE | NAVER
 
   @Column({ name: 'provider_id', type: 'varchar', length: 100 })
   providerId!: string;

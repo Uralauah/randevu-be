@@ -7,7 +7,6 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  IsUUID,
   ValidateNested,
 } from 'class-validator';
 
@@ -64,9 +63,6 @@ export class CreateDateCourseItemDto {
 }
 
 export class CreateDateCourseDto {
-  @IsUUID()
-  userId!: string;
-
   @IsDateString()
   date!: string;
 

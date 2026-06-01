@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SocialAccount } from './auth/entities/social-account.entity';
 import { User } from './auth/entities/user.entity';
+import { AuthRefreshToken } from './auth/entities/auth-refresh-token.entity';
 import { EventLog } from './events/entities/event-log.entity';
 import { PlaceRecommendation } from './random/entities/place-recommendation.entity';
 import { RandomResult } from './random/entities/random-result.entity';
@@ -20,6 +21,14 @@ import { TravelTimeCache } from './stations/entities/travel-time-cache.entity';
 import { StationsModule } from './stations/stations.module';
 import { RandomModule } from './random/random.module';
 import { PlacesModule } from './places/places.module';
+import { PlaceCache } from './places/entities';
+import { DateCoursesModule } from './date-courses/date-courses.module';
+import {
+  DateCourse,
+  DateCourseItem,
+  DateCourseParticipant,
+} from './date-courses/entities';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -39,6 +48,7 @@ import { PlacesModule } from './places/places.module';
         entities: [
           SocialAccount,
           User,
+          AuthRefreshToken,
           EventLog,
           PlaceRecommendation,
           RandomResult,
@@ -51,6 +61,10 @@ import { PlacesModule } from './places/places.module';
           SubwayStation,
           SubwayTransfer,
           TravelTimeCache,
+          PlaceCache,
+          DateCourse,
+          DateCourseItem,
+          DateCourseParticipant,
         ],
         synchronize: true,
       }),
@@ -59,6 +73,8 @@ import { PlacesModule } from './places/places.module';
     StationsModule,
     RandomModule,
     PlacesModule,
+    DateCoursesModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

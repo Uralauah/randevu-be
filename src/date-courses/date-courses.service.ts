@@ -8,11 +8,7 @@ import { randomBytes } from 'crypto';
 import { Repository } from 'typeorm';
 import { User } from '../auth/entities';
 import { SubwayStation } from '../stations/entities';
-import {
-  DateCourse,
-  DateCourseItem,
-  DateCourseParticipant,
-} from './entities';
+import { DateCourse, DateCourseItem, DateCourseParticipant } from './entities';
 import {
   CreateDateCourseDto,
   CreateDateCourseItemDto,
@@ -37,12 +33,12 @@ export class DateCoursesService {
     private readonly stationRepository: Repository<SubwayStation>,
   ) {}
 
-  async create(dto: CreateDateCourseDto) {
-    await this.assertUserExists(dto.userId);
+  async create(userId: string, dto: CreateDateCourseDto) {
+    await this.assertUserExists(userId);
     await this.assertStationExists(dto.stationId);
 
     const course = this.courseRepository.create({
-      ownerUserId: dto.userId,
+      ownerUserId: userId,
       stationId: dto.stationId,
       title: dto.title,
       date: dto.date,
@@ -52,7 +48,7 @@ export class DateCoursesService {
         .map((item) => this.createItemEntity(item)),
       participants: [
         this.participantRepository.create({
-          userId: dto.userId,
+          userId,
           role: 'OWNER',
         }),
       ],
@@ -60,7 +56,7 @@ export class DateCoursesService {
 
     const savedCourse = await this.courseRepository.save(course);
 
-    return this.findOne(savedCourse.id, dto.userId);
+    return this.findOne(savedCourse.id, userId);
   }
 
   async findAll(userId: string) {
