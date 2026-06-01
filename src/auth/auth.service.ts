@@ -138,9 +138,15 @@ export class AuthService {
     }
 
     if (dto.provider === 'GOOGLE') {
+      if (!dto.accessToken) {
+        throw new UnauthorizedException('구글 로그인 정보가 없습니다.');
+      }
       return this.fetchGoogleProfile(dto.accessToken);
     }
 
+    if (!dto.accessToken) {
+      throw new UnauthorizedException('네이버 로그인 정보가 없습니다.');
+    }
     return this.fetchNaverProfile(dto.accessToken);
   }
 
