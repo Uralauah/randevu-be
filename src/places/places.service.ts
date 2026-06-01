@@ -6,15 +6,20 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { createHash } from 'crypto';
 import { SubwayStation } from '../stations/entities';
 import { NaverLocalClient, NaverLocalItem } from './naver-local.client';
 import {
   MEAL_TIMES,
   PLACE_TYPES,
   MealTime,
+  PlaceDetailResponse,
   PlaceResponse,
   PlaceType,
 } from './places.type';
+import { PlaceCache } from './entities';
+import { NaverBlogClient } from './naver-blog.client';
+import { PlaceTagService } from './place-tag.service';
 
 interface CandidatePlace extends PlaceResponse {
   matchedQueries: string[];
@@ -36,7 +41,14 @@ export class PlacesService {
     @InjectRepository(SubwayStation)
     private readonly stationRepository: Repository<SubwayStation>,
 
+    @InjectRepository(PlaceCache)
+    private readonly placeCacheRepository: Repository<PlaceCache>,
+
     private readonly naverLocalClient: NaverLocalClient,
+
+    private readonly naverBlogClient: NaverBlogClient,
+
+    private readonly placeTagService: PlaceTagService,
   ) {}
 
   async findPlacesByStation(
@@ -89,7 +101,25 @@ export class PlacesService {
     const finalPlaces =
       qualifiedPlaces.length >= 5 ? qualifiedPlaces : rankedPlaces;
 
-    return finalPlaces.slice(0, RESPONSE_LIMIT_BY_TYPE[type]);
+    const selectedPlaces = finalPlaces.slice(0, RESPONSE_LIMIT_BY_TYPE[type]);
+
+    await this.cachePlaces(selectedPlaces);
+
+    return selectedPlaces;
+  }
+
+  async findPlaceDetail(placeKey: string): Promise<PlaceDetailResponse> {
+    const place = await this.placeCacheRepository.findOne({
+      where: { placeKey },
+    });
+
+    if (!place) {
+      throw new NotFoundException('장소 정보를 찾을 수 없습니다.');
+    }
+
+    const refreshedPlace = await this.refreshPlaceTagsIfNeeded(place);
+
+    return this.toPlaceDetailResponse(refreshedPlace);
   }
 
   private async fetchNaverCandidates(
@@ -212,21 +242,160 @@ export class PlacesService {
     type: PlaceType,
   ): PlaceResponse {
     const name = this.stripHtml(item.title);
+    const naverPlaceId = this.extractNaverPlaceId(item.link);
+    const address = item.roadAddress || item.address || null;
+    const placeKey = this.createPlaceKey('NAVER', naverPlaceId, name, address);
+    const links = this.classifyPlaceLink(item.link);
 
     return {
+      placeKey,
       kakaoPlaceId: null,
-      naverPlaceId: this.extractNaverPlaceId(item.link),
+      naverPlaceId,
       provider: 'NAVER',
       type,
       name,
+      description: this.stripHtml(item.description),
       categoryName: item.category || '',
-      address: item.roadAddress || item.address || null,
-      lat: null,
-      lng: null,
+      address,
+      lat: Number(item.mapy) / 10_000_000,
+      lng: Number(item.mapx) / 10_000_000,
       distanceMeters: null,
       phone: item.telephone || null,
-      externalLink: item.link,
+      mapLink: links.mapLink,
+      externalLink: links.externalLink,
+      instagramLink: links.instagramLink,
+      reservationLink: links.reservationLink,
       matchedQueries: [],
+    };
+  }
+
+  private async cachePlaces(places: PlaceResponse[]) {
+    if (places.length === 0) {
+      return;
+    }
+
+    const rows = places.map((place) => ({
+      placeKey: place.placeKey,
+      provider: place.provider ?? 'NAVER',
+      externalId: place.naverPlaceId ?? place.kakaoPlaceId ?? null,
+      placeType: place.type,
+      name: place.name,
+      description: place.description || null,
+      categoryName: place.categoryName || null,
+      address: place.address,
+      lat: place.lat,
+      lng: place.lng,
+      phone: place.phone,
+      openingHours: '알 수 없음',
+      externalLink: place.externalLink,
+      mapLink: place.mapLink ?? null,
+      instagramLink: place.instagramLink ?? null,
+      reservationLink: place.reservationLink ?? null,
+      tags: place.tags ?? [],
+      tagDetails: place.tagDetails ?? [],
+      rawLocal: {
+        matchedQueries: place.matchedQueries ?? [],
+        recommendationScore: place.recommendationScore ?? null,
+      },
+    }));
+
+    await this.placeCacheRepository.upsert(rows as any[], ['placeKey']);
+  }
+
+  private async refreshPlaceTagsIfNeeded(place: PlaceCache) {
+    if (!this.shouldRefreshTags(place)) {
+      return place;
+    }
+
+    const blogItems = await this.safeSearchBlogsForPlace(place);
+    const tagResult = this.placeTagService.infer(place, blogItems);
+
+    await this.placeCacheRepository.update(place.placeKey, {
+      summary: tagResult.summary,
+      tags: tagResult.tags,
+      tagDetails: tagResult.tagDetails,
+      rawBlog: blogItems,
+      tagCachedAt: new Date(),
+    });
+
+    return Object.assign(place, {
+      summary: tagResult.summary,
+      tags: tagResult.tags,
+      tagDetails: tagResult.tagDetails,
+      rawBlog: blogItems,
+      tagCachedAt: new Date(),
+    });
+  }
+
+  private shouldRefreshTags(place: PlaceCache) {
+    if (!place.tagCachedAt) {
+      return true;
+    }
+
+    const ttlMs = 1000 * 60 * 60 * 24 * 7;
+
+    return Date.now() - place.tagCachedAt.getTime() > ttlMs;
+  }
+
+  private async safeSearchBlogsForPlace(place: PlaceCache) {
+    try {
+      return await this.naverBlogClient.searchBlogs({
+        query: this.buildBlogSearchQuery(place),
+        display: 10,
+        sort: 'sim',
+      });
+    } catch (error) {
+      this.logger.warn(
+        `네이버 블로그 검색 실패: place=${place.name}, error=${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+
+      return [];
+    }
+  }
+
+  private buildBlogSearchQuery(place: PlaceCache) {
+    const addressKeyword = this.extractUsefulAddress(place.address ?? '');
+
+    if (place.placeType === 'CAFE') {
+      return `${place.name} ${addressKeyword} 후기 분위기 디저트 감성`;
+    }
+
+    if (place.placeType === 'ACTIVITY') {
+      return `${place.name} ${addressKeyword} 후기 데이트 분위기`;
+    }
+
+    return `${place.name} ${addressKeyword} 후기 분위기 맛집 데이트`;
+  }
+
+  private extractUsefulAddress(address: string) {
+    const parts = address.split(' ').filter(Boolean);
+
+    return parts.slice(0, 3).join(' ');
+  }
+
+  private toPlaceDetailResponse(place: PlaceCache): PlaceDetailResponse {
+    return {
+      placeKey: place.placeKey,
+      provider: place.provider,
+      externalId: place.externalId,
+      type: place.placeType,
+      name: place.name,
+      summary: place.summary,
+      description: place.description,
+      categoryName: place.categoryName,
+      address: place.address,
+      lat: place.lat === null ? null : Number(place.lat),
+      lng: place.lng === null ? null : Number(place.lng),
+      phone: place.phone,
+      openingHours: place.openingHours || '알 수 없음',
+      mapLink: place.mapLink,
+      externalLink: place.externalLink,
+      instagramLink: place.instagramLink,
+      reservationLink: place.reservationLink,
+      tags: place.tags ?? [],
+      tagDetails: place.tagDetails ?? [],
     };
   }
 
@@ -339,10 +508,106 @@ export class PlacesService {
     return `${normalizedName}:${normalizedAddress}`;
   }
 
+  private createPlaceKey(
+    provider: 'NAVER' | 'KAKAO',
+    externalId: string | null,
+    name: string,
+    address: string | null,
+  ) {
+    if (externalId) {
+      return `${provider.toLowerCase()}:${externalId}`;
+    }
+
+    const hash = createHash('sha1')
+      .update(
+        `${provider}:${this.normalize(name)}:${this.normalize(address ?? '')}`,
+      )
+      .digest('hex')
+      .slice(0, 24);
+
+    return `${provider.toLowerCase()}:hash:${hash}`;
+  }
+
   private extractNaverPlaceId(link: string) {
     const match = link.match(/\/place\/(\d+)/);
 
     return match?.[1] ?? null;
+  }
+
+  private classifyPlaceLink(link: string) {
+    if (!link) {
+      return {
+        externalLink: null,
+        mapLink: null,
+        instagramLink: null,
+        reservationLink: null,
+      };
+    }
+
+    const normalizedLink = link.toLowerCase();
+
+    if (
+      normalizedLink.includes('instagram.com') ||
+      normalizedLink.includes('instagr.am')
+    ) {
+      return {
+        externalLink: null,
+        mapLink: null,
+        instagramLink: link,
+        reservationLink: null,
+      };
+    }
+
+    if (
+      normalizedLink.includes('catchtable.co.kr') ||
+      normalizedLink.includes('app.catchtable') ||
+      normalizedLink.includes('catchtable')
+    ) {
+      return {
+        externalLink: null,
+        mapLink: null,
+        instagramLink: null,
+        reservationLink: link,
+      };
+    }
+
+    if (
+      normalizedLink.includes('booking.naver.com') ||
+      normalizedLink.includes('m.booking.naver.com')
+    ) {
+      return {
+        externalLink: null,
+        mapLink: null,
+        instagramLink: null,
+        reservationLink: link,
+      };
+    }
+
+    if (this.isMapLink(normalizedLink)) {
+      return {
+        externalLink: link,
+        mapLink: link,
+        instagramLink: null,
+        reservationLink: null,
+      };
+    }
+
+    return {
+      externalLink: link,
+      mapLink: null,
+      instagramLink: null,
+      reservationLink: null,
+    };
+  }
+
+  private isMapLink(normalizedLink: string) {
+    return (
+      normalizedLink.includes('map.naver.com') ||
+      normalizedLink.includes('m.place.naver.com') ||
+      normalizedLink.includes('pcmap.place.naver.com') ||
+      normalizedLink.includes('place.map.kakao.com') ||
+      /\/place\/\d+/.test(normalizedLink)
+    );
   }
 
   private stripHtml(value: string) {
