@@ -6,7 +6,7 @@ import {
   SubwayTransfer,
   TravelTimeCache,
 } from './entities';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, Repository } from 'typeorm';
 
 type GraphNodeKey = string;
 
@@ -33,9 +33,19 @@ export class StationsService {
     private readonly travelTimeCacheRepository: Repository<TravelTimeCache>,
   ) {}
 
-  async findAll() {
+  async findAll(regionCode?: string) {
+    const where: FindOptionsWhere<SubwayStation> | undefined = regionCode
+      ? {
+          region: {
+            code: regionCode.toUpperCase(),
+          },
+        }
+      : undefined;
+
     const stations = await this.stationRepository.find({
+      where,
       relations: {
+        region: true,
         stationLines: {
           line: true,
         },
@@ -52,10 +62,18 @@ export class StationsService {
       lng: station.lng,
       weightGrade: station.weightGrade,
       placeCount: station.placeCount,
+      region: station.region
+        ? {
+            id: station.region.id,
+            name: station.region.name,
+            code: station.region.code,
+          }
+        : null,
       lines: station.stationLines.map((stationLine) => ({
         id: stationLine.line.id,
         name: stationLine.line.name,
         color: stationLine.line.color,
+        regionId: stationLine.line.regionId,
       })),
     }));
   }

@@ -1,4 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { TravelTimeCache } from '../stations/entities';
+import { RandomResult } from './entities';
 import { RandomService } from './random.service';
 
 describe('RandomService', () => {
@@ -6,7 +9,17 @@ describe('RandomService', () => {
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [RandomService],
+      providers: [
+        RandomService,
+        {
+          provide: getRepositoryToken(RandomResult),
+          useValue: {},
+        },
+        {
+          provide: getRepositoryToken(TravelTimeCache),
+          useValue: {},
+        },
+      ],
     }).compile();
 
     service = module.get<RandomService>(RandomService);

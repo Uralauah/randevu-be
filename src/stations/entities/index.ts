@@ -1,3 +1,4 @@
+export { Region } from './region.entity';
 export { SubwayLine } from './subway-line.entity';
 export { SubwayStation } from './subway-station.entity';
 export { StationLine } from './station-line.entity';

@@ -78,6 +78,7 @@ export class RandomService {
   private findReachableStations(dto: CreateRandomSubwayDto) {
     return this.travelTimeCacheRepository
       .createQueryBuilder('cache')
+      .innerJoin('cache.departureStation', 'departureStation')
       .innerJoinAndSelect('cache.arrivalStation', 'station')
       .leftJoinAndSelect('station.stationLines', 'stationLine')
       .leftJoinAndSelect('stationLine.line', 'line')
@@ -87,6 +88,7 @@ export class RandomService {
       .andWhere('cache.minTravelMinutes <= :maxMinutes', {
         maxMinutes: dto.maxMinutes,
       })
+      .andWhere('station.regionId = departureStation.regionId')
       .getMany();
   }
 

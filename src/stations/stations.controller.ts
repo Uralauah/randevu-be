@@ -1,14 +1,13 @@
-import { Controller, Get, Post } from '@nestjs/common';
+import { Controller, Get, Post, Query } from '@nestjs/common';
 import { StationsService } from './stations.service';
-import { SubwayStation } from './entities';
 
 @Controller('stations')
 export class StationsController {
   constructor(private readonly stationsService: StationsService) {}
 
   @Get()
-  findAll() {
-    return this.stationsService.findAll();
+  findAll(@Query('region') region?: string) {
+    return this.stationsService.findAll(region);
   }
 
   @Post('travel-time-cache/rebuild')

@@ -1,4 +1,13 @@
-import { Entity, PrimaryColumn, Column, OneToMany, Check } from 'typeorm';
+import {
+  Entity,
+  PrimaryColumn,
+  Column,
+  OneToMany,
+  Check,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
+import { Region } from './region.entity';
 import { StationLine } from './station-line.entity';
 import { SubwayEdge } from './subway-edge.entity';
 import { SubwayTransfer } from './subway-transfer.entity';
@@ -28,6 +37,13 @@ export class SubwayStation {
 
   @Column({ name: 'place_count', type: 'int', default: 0 })
   placeCount!: number;
+
+  @Column({ name: 'region_id', type: 'int' })
+  regionId!: number;
+
+  @ManyToOne(() => Region, (region) => region.stations)
+  @JoinColumn({ name: 'region_id' })
+  region!: Region;
 
   @OneToMany(() => StationLine, (sl) => sl.station)
   stationLines!: StationLine[];

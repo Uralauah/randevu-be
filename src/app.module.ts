@@ -13,6 +13,7 @@ import { ExcludedStationPresetItem } from './saved/entities/excluded-station-pre
 import { ExcludedStationPreset } from './saved/entities/excluded-station-preset.entity';
 import { SavedResult } from './saved/entities/saved-result.entity';
 import { StationLine } from './stations/entities/station-line.entity';
+import { Region } from './stations/entities/region.entity';
 import { SubwayEdge } from './stations/entities/subway-edge.entity';
 import { SubwayLine } from './stations/entities/subway-line.entity';
 import { SubwayStation } from './stations/entities/subway-station.entity';
@@ -55,6 +56,7 @@ import { AuthModule } from './auth/auth.module';
           ExcludedStationPresetItem,
           ExcludedStationPreset,
           SavedResult,
+          Region,
           StationLine,
           SubwayEdge,
           SubwayLine,
