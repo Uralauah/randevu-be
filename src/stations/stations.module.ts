@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { StationsController } from './stations.controller';
 import { StationsService } from './stations.service';
 import {
+  Region,
   SubwayStation,
   SubwayEdge,
   SubwayTransfer,
@@ -12,6 +13,7 @@ import {
 @Module({
   imports: [
     TypeOrmModule.forFeature([
+      Region,
       SubwayStation,
       SubwayEdge,
       SubwayTransfer,

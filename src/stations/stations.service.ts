@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
+  Region,
   SubwayEdge,
   SubwayStation,
   SubwayTransfer,
@@ -20,6 +21,9 @@ export class StationsService {
   private readonly logger = new Logger(StationsService.name);
 
   constructor(
+    @InjectRepository(Region)
+    private readonly regionRepository: Repository<Region>,
+
     @InjectRepository(SubwayStation)
     private readonly stationRepository: Repository<SubwayStation>,
 
@@ -32,6 +36,20 @@ export class StationsService {
     @InjectRepository(TravelTimeCache)
     private readonly travelTimeCacheRepository: Repository<TravelTimeCache>,
   ) {}
+
+  async findRegions() {
+    const regions = await this.regionRepository.find({
+      order: {
+        id: 'ASC',
+      },
+    });
+
+    return regions.map((region) => ({
+      id: region.id,
+      name: region.name,
+      code: region.code,
+    }));
+  }
 
   async findAll(regionCode?: string) {
     const where: FindOptionsWhere<SubwayStation> | undefined = regionCode
@@ -78,18 +96,44 @@ export class StationsService {
     }));
   }
 
-  async rebuildTravelTimeCache() {
-    const stations = await this.stationRepository.find();
+  async rebuildTravelTimeCache(regionCode?: string) {
+    const normalizedRegionCode = regionCode?.toUpperCase();
+    const where: FindOptionsWhere<SubwayStation> | undefined =
+      normalizedRegionCode
+        ? {
+            region: {
+              code: normalizedRegionCode,
+            },
+          }
+        : undefined;
+    const stations = await this.stationRepository.find({
+      where,
+      relations: {
+        region: true,
+      },
+    });
+
+    if (normalizedRegionCode && stations.length === 0) {
+      throw new BadRequestException('지역에 해당하는 역을 찾을 수 없습니다.');
+    }
+
     const edges = await this.edgeRepository.find();
     const transfers = await this.transferRepository.find();
+    const regionStationIds = normalizedRegionCode
+      ? new Set(stations.map((station) => station.id))
+      : null;
 
     this.logger.log(
-      `이동시간 캐시 재생성 시작: stations=${stations.length}, edges=${edges.length}, transfers=${transfers.length}`,
+      `이동시간 캐시 재생성 시작: region=${normalizedRegionCode ?? 'ALL'}, stations=${stations.length}, edges=${edges.length}, transfers=${transfers.length}`,
     );
 
     const graph = this.buildGraph(edges, transfers);
 
-    await this.travelTimeCacheRepository.clear();
+    if (regionStationIds) {
+      await this.clearTravelTimeCacheByStationIds([...regionStationIds]);
+    } else {
+      await this.travelTimeCacheRepository.clear();
+    }
 
     const cacheRows: TravelTimeCache[] = [];
 
@@ -102,6 +146,10 @@ export class StationsService {
       );
 
       for (const [arrivalStationId, minTravelMinutes] of distances.entries()) {
+        if (regionStationIds && !regionStationIds.has(arrivalStationId)) {
+          continue;
+        }
+
         cacheRows.push(
           this.travelTimeCacheRepository.create({
             departureStationId: station.id,
@@ -112,14 +160,30 @@ export class StationsService {
       }
     }
 
-    await this.travelTimeCacheRepository.save(cacheRows, { chunk: 1000 });
+    if (cacheRows.length > 0) {
+      await this.travelTimeCacheRepository.save(cacheRows, { chunk: 1000 });
+    }
 
-    this.logger.log('이동시간 캐시 재설정 완료: rows=${cacheRows.length}');
+    this.logger.log(`이동시간 캐시 재설정 완료: rows=${cacheRows.length}`);
 
     return {
+      region: normalizedRegionCode ?? null,
       stationCount: stations.length,
       cacheCount: cacheRows.length,
     };
+  }
+
+  private async clearTravelTimeCacheByStationIds(stationIds: number[]) {
+    if (stationIds.length === 0) {
+      return;
+    }
+
+    await this.travelTimeCacheRepository
+      .createQueryBuilder()
+      .delete()
+      .where('departure_station_id IN (:...stationIds)', { stationIds })
+      .orWhere('arrival_station_id IN (:...stationIds)', { stationIds })
+      .execute();
   }
 
   private buildGraph(edges: SubwayEdge[], transfers: SubwayTransfer[]) {
