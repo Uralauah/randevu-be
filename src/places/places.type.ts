@@ -30,8 +30,8 @@ export interface PlaceDateRecommendationResponse {
   station: {
     id: number;
     name: string;
-    lat: number;
-    lng: number;
+    lat: number | null;
+    lng: number | null;
   };
   source: 'NAVER';
   date: string;

@@ -21,11 +21,11 @@ export class SubwayStation {
   @Column({ type: 'varchar', length: 50 })
   name!: string;
 
-  @Column({ type: 'decimal', precision: 10, scale: 7 })
-  lat!: number;
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  lat!: number | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 7 })
-  lng!: number;
+  @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
+  lng!: number | null;
 
   @Column({
     name: 'weight_grade',
