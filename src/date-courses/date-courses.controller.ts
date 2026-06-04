@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -14,6 +15,7 @@ import { DateCoursesService } from './date-courses.service';
 import {
   CalculateDateCourseWalkingSegmentsDto,
   CreateDateCourseDto,
+  UpdateDateCourseDto,
 } from './dto/create-date-course.dto';
 
 @Controller('date-courses')
@@ -40,6 +42,15 @@ export class DateCoursesController {
   @Public()
   previewWalkingSegments(@Body() dto: CalculateDateCourseWalkingSegmentsDto) {
     return this.dateCoursesService.previewWalkingSegments(dto);
+  }
+
+  @Patch(':id')
+  update(
+    @CurrentUser() user: CurrentUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateDateCourseDto,
+  ) {
+    return this.dateCoursesService.update(id, user.id, dto);
   }
 
   @Delete(':id')

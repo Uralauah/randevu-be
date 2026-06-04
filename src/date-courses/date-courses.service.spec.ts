@@ -8,21 +8,27 @@ import { DateCourse, DateCourseItem, DateCourseParticipant } from './entities';
 describe('DateCoursesService', () => {
   let service: DateCoursesService;
   let courseRepository: MockRepository<DateCourse>;
+  let itemRepository: MockRepository<DateCourseItem>;
   let participantRepository: MockRepository<DateCourseParticipant>;
   let userRepository: MockRepository<User>;
-  let dateCoursesGateway: Pick<DateCoursesGateway, 'emitParticipantJoined'>;
+  let dateCoursesGateway: Pick<
+    DateCoursesGateway,
+    'emitParticipantJoined' | 'emitCourseUpdated'
+  >;
 
   beforeEach(() => {
     courseRepository = mockRepository<DateCourse>();
+    itemRepository = mockRepository<DateCourseItem>();
     participantRepository = mockRepository<DateCourseParticipant>();
     userRepository = mockRepository<User>();
     dateCoursesGateway = {
       emitParticipantJoined: jest.fn(),
+      emitCourseUpdated: jest.fn(),
     };
 
     service = new DateCoursesService(
       courseRepository,
-      mockRepository<DateCourseItem>(),
+      itemRepository,
       participantRepository,
       userRepository,
       mockRepository<SubwayStation>(),
@@ -156,6 +162,124 @@ describe('DateCoursesService', () => {
     });
   });
 
+  describe('update', () => {
+    it('updates date and emits a course updated socket event', async () => {
+      const course = createCourse({
+        items: [
+          createCourseItem({
+            id: 'first',
+            itemOrder: 1,
+            name: '식당',
+            lat: 37,
+            lng: 127,
+          }),
+        ],
+      });
+
+      participantRepository.findOne.mockResolvedValue(
+        {} as DateCourseParticipant,
+      );
+      courseRepository.findOne.mockResolvedValue(course);
+
+      await service.update('course-id', 'partner-id', {
+        date: '2026-06-05',
+      });
+
+      expect(courseRepository.update).toHaveBeenCalledWith('course-id', {
+        date: '2026-06-05',
+      });
+      expect(dateCoursesGateway.emitCourseUpdated).toHaveBeenCalledWith({
+        courseId: 'course-id',
+        updatedByUserId: 'partner-id',
+        changed: {
+          date: true,
+          items: false,
+        },
+      });
+    });
+
+    it('adds, deletes, and reorders items without editing existing item details', async () => {
+      const firstItem = createCourseItem({
+        id: 'first',
+        itemOrder: 1,
+        name: '기존 식당',
+        lat: 37,
+        lng: 127,
+      });
+      const deletedItem = createCourseItem({
+        id: 'deleted',
+        itemOrder: 2,
+        name: '삭제될 카페',
+        lat: 37.001,
+        lng: 127,
+      });
+      const course = createCourse({
+        items: [firstItem, deletedItem],
+      });
+
+      participantRepository.findOne.mockResolvedValue(
+        {} as DateCourseParticipant,
+      );
+      courseRepository.findOne.mockResolvedValue(course);
+
+      await service.update('course-id', 'partner-id', {
+        items: [
+          {
+            id: 'first',
+            itemOrder: 2,
+            name: '수정 시도',
+          },
+          {
+            itemOrder: 1,
+            itemType: 'CAFE',
+            name: '새 카페',
+            lat: 37.002,
+            lng: 127,
+          },
+        ],
+      });
+
+      expect(firstItem).toMatchObject({
+        id: 'first',
+        itemOrder: 2,
+        name: '기존 식당',
+      });
+      const deleteCriteria = itemRepository.delete.mock.calls[0]?.[0] as
+        | { courseId?: string; id?: unknown }
+        | undefined;
+
+      expect(deleteCriteria?.courseId).toBe('course-id');
+      expect(deleteCriteria?.id).toBeDefined();
+      expect(itemRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          courseId: 'course-id',
+          itemOrder: 1,
+          itemType: 'CAFE',
+          name: '새 카페',
+        }),
+      );
+      expect(itemRepository.save).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          firstItem,
+          expect.objectContaining({
+            courseId: 'course-id',
+            itemOrder: 1,
+            itemType: 'CAFE',
+            name: '새 카페',
+          }),
+        ]),
+      );
+      expect(dateCoursesGateway.emitCourseUpdated).toHaveBeenCalledWith({
+        courseId: 'course-id',
+        updatedByUserId: 'partner-id',
+        changed: {
+          date: false,
+          items: true,
+        },
+      });
+    });
+  });
+
   describe('acceptInvite', () => {
     it('emits a socket event when a new participant joins', async () => {
       const course = {
@@ -242,6 +366,23 @@ function callToCourseResponse(
     updatedAt: new Date('2026-06-04T00:00:00.000Z'),
     ...course,
   } as DateCourse);
+}
+
+function createCourse(params: { items: DateCourseItem[] }) {
+  return {
+    id: 'course-id',
+    ownerUserId: 'owner-id',
+    date: '2026-06-04',
+    title: '데이트 코스',
+    memo: null,
+    inviteToken: null,
+    inviteExpiresAt: null,
+    station: null,
+    items: params.items,
+    participants: [],
+    createdAt: new Date('2026-06-04T00:00:00.000Z'),
+    updatedAt: new Date('2026-06-04T00:00:00.000Z'),
+  } as DateCourse;
 }
 
 function createCourseItem(params: {

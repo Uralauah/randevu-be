@@ -41,6 +41,15 @@ export interface DateCourseParticipantJoinedPayload {
   };
 }
 
+export interface DateCourseUpdatedPayload {
+  courseId: string;
+  updatedByUserId: string;
+  changed: {
+    date: boolean;
+    items: boolean;
+  };
+}
+
 @WebSocketGateway({
   namespace: 'date-courses',
   cors: {
@@ -152,6 +161,26 @@ export class DateCoursesGateway implements OnGatewayConnection {
               ? payload.participant.joinedAt.toISOString()
               : payload.participant.joinedAt,
         },
+        emittedAt: new Date().toISOString(),
+        refetchRecommended: true,
+      });
+  }
+
+  emitCourseUpdated(payload: DateCourseUpdatedPayload) {
+    if (!this.server) {
+      this.logger.warn(
+        `Socket server is not ready. Skipped course:updated for courseId=${payload.courseId}`,
+      );
+      return;
+    }
+
+    this.server
+      .to(this.getCourseRoom(payload.courseId))
+      .emit('course:updated', {
+        type: 'COURSE_UPDATED',
+        courseId: payload.courseId,
+        updatedByUserId: payload.updatedByUserId,
+        changed: payload.changed,
         emittedAt: new Date().toISOString(),
         refetchRecommended: true,
       });

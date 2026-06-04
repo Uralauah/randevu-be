@@ -1,11 +1,12 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { User } from '../auth/entities';
 import { SubwayStation } from '../stations/entities';
 import { DateCourse, DateCourseItem, DateCourseParticipant } from './entities';
@@ -13,6 +14,8 @@ import {
   CalculateDateCourseWalkingSegmentsDto,
   CreateDateCourseDto,
   CreateDateCourseItemDto,
+  UpdateDateCourseDto,
+  UpdateDateCourseItemDto,
 } from './dto/create-date-course.dto';
 import { DateCoursesGateway } from './date-courses.gateway';
 
@@ -113,6 +116,36 @@ export class DateCoursesService {
     const course = await this.findCourseOrThrow(courseId);
 
     return this.toCourseResponse(course);
+  }
+
+  async update(courseId: string, userId: string, dto: UpdateDateCourseDto) {
+    await this.assertParticipant(courseId, userId);
+
+    const course = await this.findCourseOrThrow(courseId);
+    const changed = {
+      date: dto.date !== undefined,
+      items: dto.items !== undefined,
+    };
+
+    if (dto.date !== undefined) {
+      await this.courseRepository.update(courseId, {
+        date: dto.date,
+      });
+    }
+
+    if (dto.items !== undefined) {
+      await this.updateCourseItems(course, dto.items);
+    }
+
+    if (changed.date || changed.items) {
+      this.dateCoursesGateway.emitCourseUpdated({
+        courseId,
+        updatedByUserId: userId,
+        changed,
+      });
+    }
+
+    return this.findOne(courseId, userId);
   }
 
   previewWalkingSegments(dto: CalculateDateCourseWalkingSegmentsDto) {
@@ -223,6 +256,99 @@ export class DateCoursesService {
       reservationLink: dto.reservationLink ?? null,
       memo: dto.memo ?? null,
     });
+  }
+
+  private async updateCourseItems(
+    course: DateCourse,
+    itemDtos: UpdateDateCourseItemDto[],
+  ) {
+    this.assertUniqueItemOrders(itemDtos);
+
+    const existingItems = course.items ?? [];
+    const existingItemsById = new Map(
+      existingItems.map((item) => [item.id, item]),
+    );
+    const keptItemIds = new Set<string>();
+    const itemsToSave: DateCourseItem[] = [];
+
+    for (const itemDto of itemDtos) {
+      if (itemDto.id) {
+        const existingItem = existingItemsById.get(itemDto.id);
+
+        if (!existingItem) {
+          throw new BadRequestException('코스에 포함되지 않은 아이템입니다.');
+        }
+
+        if (keptItemIds.has(existingItem.id)) {
+          throw new BadRequestException('중복된 코스 아이템입니다.');
+        }
+
+        existingItem.itemOrder = itemDto.itemOrder;
+        keptItemIds.add(existingItem.id);
+        itemsToSave.push(existingItem);
+        continue;
+      }
+
+      itemsToSave.push(
+        this.itemRepository.create({
+          ...this.toCreateDateCourseItemDto(itemDto),
+          courseId: course.id,
+        }),
+      );
+    }
+
+    const deletedItemIds = existingItems
+      .filter((item) => !keptItemIds.has(item.id))
+      .map((item) => item.id);
+
+    if (deletedItemIds.length > 0) {
+      await this.itemRepository.delete({
+        courseId: course.id,
+        id: In(deletedItemIds),
+      });
+    }
+
+    if (itemsToSave.length > 0) {
+      await this.itemRepository.save(itemsToSave);
+    }
+  }
+
+  private assertUniqueItemOrders(items: UpdateDateCourseItemDto[]) {
+    const itemOrders = new Set<number>();
+
+    for (const item of items) {
+      if (itemOrders.has(item.itemOrder)) {
+        throw new BadRequestException('코스 순서가 중복되었습니다.');
+      }
+
+      itemOrders.add(item.itemOrder);
+    }
+  }
+
+  private toCreateDateCourseItemDto(
+    item: UpdateDateCourseItemDto,
+  ): CreateDateCourseItemDto {
+    if (!item.itemType || !item.name) {
+      throw new BadRequestException(
+        '새 코스 아이템에는 itemType과 name이 필요합니다.',
+      );
+    }
+
+    return {
+      itemType: item.itemType,
+      itemOrder: item.itemOrder,
+      placeKey: item.placeKey ?? null,
+      name: item.name,
+      categoryName: item.categoryName ?? null,
+      address: item.address ?? null,
+      lat: item.lat ?? null,
+      lng: item.lng ?? null,
+      externalLink: item.externalLink ?? null,
+      mapLink: item.mapLink ?? null,
+      instagramLink: item.instagramLink ?? null,
+      reservationLink: item.reservationLink ?? null,
+      memo: item.memo ?? null,
+    };
   }
 
   private async assertUserExists(userId: string) {

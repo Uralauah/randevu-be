@@ -85,6 +85,77 @@ export class CreateDateCourseDto {
   items!: CreateDateCourseItemDto[];
 }
 
+export class UpdateDateCourseItemDto {
+  @IsOptional()
+  @IsString()
+  id?: string | null;
+
+  @Type(() => Number)
+  @IsInt()
+  itemOrder!: number;
+
+  @IsOptional()
+  @IsIn(['RESTAURANT', 'CAFE', 'ACTIVITY', 'CUSTOM'])
+  itemType?: 'RESTAURANT' | 'CAFE' | 'ACTIVITY' | 'CUSTOM';
+
+  @IsOptional()
+  @IsString()
+  placeKey?: string | null;
+
+  @IsOptional()
+  @IsString()
+  name?: string | null;
+
+  @IsOptional()
+  @IsString()
+  categoryName?: string | null;
+
+  @IsOptional()
+  @IsString()
+  address?: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  lat?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  lng?: number | null;
+
+  @IsOptional()
+  @IsString()
+  externalLink?: string | null;
+
+  @IsOptional()
+  @IsString()
+  mapLink?: string | null;
+
+  @IsOptional()
+  @IsString()
+  instagramLink?: string | null;
+
+  @IsOptional()
+  @IsString()
+  reservationLink?: string | null;
+
+  @IsOptional()
+  @IsString()
+  memo?: string | null;
+}
+
+export class UpdateDateCourseDto {
+  @IsOptional()
+  @IsDateString()
+  date?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => UpdateDateCourseItemDto)
+  items?: UpdateDateCourseItemDto[];
+}
+
 export class DateCourseWalkingSegmentItemDto {
   @IsOptional()
   @IsString()
