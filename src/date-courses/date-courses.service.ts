@@ -84,7 +84,11 @@ export class DateCoursesService {
         course: {
           station: true,
           items: true,
-          participants: true,
+          participants: {
+            user: {
+              socialAccounts: true,
+            },
+          },
         },
       },
       order: {
@@ -160,7 +164,7 @@ export class DateCoursesService {
   }
 
   async acceptInvite(inviteToken: string, userId: string) {
-    await this.assertUserExists(userId);
+    const joiningUser = await this.findUserProfileOrThrow(userId);
 
     const course = await this.courseRepository.findOne({
       where: { inviteToken },
@@ -192,6 +196,8 @@ export class DateCoursesService {
         courseId: course.id,
         participant: {
           userId: participant.userId,
+          nickname: joiningUser.nickname,
+          platform: this.getUserPlatform(joiningUser),
           role: participant.role,
           joinedAt: participant.createdAt,
         },
@@ -255,7 +261,11 @@ export class DateCoursesService {
       relations: {
         station: true,
         items: true,
-        participants: true,
+        participants: {
+          user: {
+            socialAccounts: true,
+          },
+        },
       },
       order: {
         items: {
@@ -310,6 +320,8 @@ export class DateCoursesService {
       walkingSegments: this.buildWalkingSegments(sortedItems),
       participants: (course.participants ?? []).map((participant) => ({
         userId: participant.userId,
+        nickname: participant.user?.nickname ?? null,
+        platform: this.getUserPlatform(participant.user),
         role: participant.role,
         joinedAt: participant.createdAt,
       })),
@@ -408,5 +420,32 @@ export class DateCoursesService {
 
   private toRadians(value: number) {
     return (value * Math.PI) / 180;
+  }
+
+  private async findUserProfileOrThrow(userId: string) {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: {
+        socialAccounts: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('사용자를 찾을 수 없습니다.');
+    }
+
+    return user;
+  }
+
+  private getUserPlatform(user?: User | null) {
+    if (!user?.socialAccounts?.length) {
+      return null;
+    }
+
+    const [primaryAccount] = [...user.socialAccounts].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+    );
+
+    return primaryAccount?.provider ?? null;
   }
 }

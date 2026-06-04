@@ -34,6 +34,8 @@ export interface DateCourseParticipantJoinedPayload {
   courseId: string;
   participant: {
     userId: string;
+    nickname: string | null;
+    platform: string | null;
     role: 'OWNER' | 'PARTNER';
     joinedAt: Date | string;
   };

@@ -1,5 +1,5 @@
 import { Repository } from 'typeorm';
-import { User } from '../auth/entities';
+import { SocialAccount, User } from '../auth/entities';
 import { SubwayStation } from '../stations/entities';
 import { DateCoursesGateway } from './date-courses.gateway';
 import { DateCoursesService } from './date-courses.service';
@@ -92,6 +92,29 @@ describe('DateCoursesService', () => {
         calculationMethod: 'UNAVAILABLE',
       });
     });
+
+    it('adds participant nickname and platform', () => {
+      const response = callToCourseResponse(service, {
+        participants: [
+          createCourseParticipant({
+            userId: 'partner-id',
+            nickname: '민지',
+            platform: 'KAKAO',
+            role: 'PARTNER',
+          }),
+        ],
+      });
+
+      expect(response.participants).toEqual([
+        {
+          userId: 'partner-id',
+          nickname: '민지',
+          platform: 'KAKAO',
+          role: 'PARTNER',
+          joinedAt: new Date('2026-06-04T00:00:00.000Z'),
+        },
+      ]);
+    });
   });
 
   describe('previewWalkingSegments', () => {
@@ -147,8 +170,13 @@ describe('DateCoursesService', () => {
         role: 'PARTNER',
         createdAt: new Date('2026-06-04T00:00:00.000Z'),
       } as DateCourseParticipant;
+      const joiningUser = createUser({
+        id: 'partner-id',
+        nickname: '민지',
+        platform: 'KAKAO',
+      });
 
-      userRepository.exists.mockResolvedValue(true);
+      userRepository.findOne.mockResolvedValueOnce(joiningUser);
       courseRepository.findOne
         .mockResolvedValueOnce(course)
         .mockResolvedValueOnce({
@@ -169,6 +197,8 @@ describe('DateCoursesService', () => {
         courseId: course.id,
         participant: {
           userId: 'partner-id',
+          nickname: '민지',
+          platform: 'KAKAO',
           role: 'PARTNER',
           joinedAt: participant.createdAt,
         },
@@ -188,6 +218,13 @@ function callToCourseResponse(
           distanceMeters: number | null;
           estimatedWalkingMinutes: number | null;
           calculationMethod: string;
+        }>;
+        participants: Array<{
+          userId: string;
+          nickname: string | null;
+          platform: string | null;
+          role: 'OWNER' | 'PARTNER';
+          joinedAt: Date;
         }>;
       };
     }
@@ -230,6 +267,42 @@ function createCourseItem(params: {
     reservationLink: null,
     memo: null,
   } as DateCourseItem;
+}
+
+function createCourseParticipant(params: {
+  userId: string;
+  nickname: string;
+  platform: string;
+  role: 'OWNER' | 'PARTNER';
+}) {
+  return {
+    courseId: 'course-id',
+    userId: params.userId,
+    role: params.role,
+    createdAt: new Date('2026-06-04T00:00:00.000Z'),
+    user: createUser({
+      id: params.userId,
+      nickname: params.nickname,
+      platform: params.platform,
+    }),
+  } as DateCourseParticipant;
+}
+
+function createUser(params: {
+  id: string;
+  nickname: string;
+  platform: string;
+}) {
+  return {
+    id: params.id,
+    nickname: params.nickname,
+    socialAccounts: [
+      {
+        provider: params.platform,
+        createdAt: new Date('2026-06-04T00:00:00.000Z'),
+      } as SocialAccount,
+    ],
+  } as User;
 }
 
 type MockRepository<T extends object> = {
