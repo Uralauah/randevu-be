@@ -67,6 +67,9 @@ describe('PlacesService', () => {
       name: '삼성',
       lat: 37.5088,
       lng: 127.0631,
+      region: {
+        name: '서울',
+      },
     });
     naverLocalClient.searchLocal.mockResolvedValue([
       {
@@ -93,6 +96,32 @@ describe('PlacesService', () => {
       name: '코엑스아쿠아리움',
       reason: expect.stringContaining('좋아요'),
     });
+    expect(naverLocalClient.searchLocal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.stringContaining('서울 삼성'),
+      }),
+    );
     expect(placeCacheRepository.upsert).toHaveBeenCalled();
+  });
+
+  it('includes region name in place list search queries', async () => {
+    stationRepository.findOne.mockResolvedValue({
+      id: 2,
+      name: '어린이세상',
+      lat: 35.845,
+      lng: 128.624,
+      region: {
+        name: '대구',
+      },
+    });
+    naverLocalClient.searchLocal.mockResolvedValue([]);
+
+    await service.findPlacesByStation(2, 'RESTAURANT');
+
+    expect(naverLocalClient.searchLocal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: '대구 어린이세상 데이트 맛집',
+      }),
+    );
   });
 });

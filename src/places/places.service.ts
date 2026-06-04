@@ -70,6 +70,9 @@ export class PlacesService {
 
     const station = await this.stationRepository.findOne({
       where: { id: stationId },
+      relations: {
+        region: true,
+      },
     });
 
     if (!station) {
@@ -99,6 +102,9 @@ export class PlacesService {
     const dateContext = this.parseDateRecommendationContext(date);
     const station = await this.stationRepository.findOne({
       where: { id: stationId },
+      relations: {
+        region: true,
+      },
     });
 
     if (!station) {
@@ -107,12 +113,9 @@ export class PlacesService {
 
     const recommendationGroups = await Promise.all(
       PLACE_TYPES.map(async (type) => {
-        const baseQueries = this.buildSearchQueries(station.name, type).slice(
-          0,
-          3,
-        );
+        const baseQueries = this.buildSearchQueries(station, type).slice(0, 3);
         const dateQueries = this.buildDateRecommendationSearchQueries(
-          station.name,
+          station,
           type,
           dateContext,
         );
@@ -184,7 +187,7 @@ export class PlacesService {
     type: PlaceType,
     mealTime?: MealTime,
   ): Promise<PlaceResponse[]> {
-    const queries = this.buildSearchQueries(station.name, type, mealTime);
+    const queries = this.buildSearchQueries(station, type, mealTime);
     const candidates = await this.fetchNaverCandidates(queries, type);
     const rankedPlaces = this.rankPlaces(candidates, type, mealTime);
 
@@ -274,11 +277,11 @@ export class PlacesService {
   }
 
   private buildSearchQueries(
-    stationName: string,
+    station: SubwayStation,
     type: PlaceType,
     mealTime?: MealTime,
   ) {
-    const base = this.toSearchStationName(stationName);
+    const base = this.toSearchLocationName(station);
 
     if (type === 'CAFE') {
       return [
@@ -330,11 +333,11 @@ export class PlacesService {
   }
 
   private buildDateRecommendationSearchQueries(
-    stationName: string,
+    station: SubwayStation,
     type: PlaceType,
     dateContext: DateRecommendationContext,
   ) {
-    const base = this.toSearchStationName(stationName);
+    const base = this.toSearchLocationName(station);
 
     if (dateContext.season === 'SUMMER') {
       if (type === 'ACTIVITY') {
@@ -381,6 +384,31 @@ export class PlacesService {
     }
 
     return [`${base} 저녁 맛집`, `${base} 점심 맛집`];
+  }
+
+  private toSearchLocationName(station: SubwayStation) {
+    const stationKeyword = this.toSearchStationAreaName(station.name);
+    const regionKeyword = this.toSearchRegionName(station.region?.name);
+
+    if (!regionKeyword) {
+      return this.toSearchStationName(station.name);
+    }
+
+    if (
+      this.normalize(stationKeyword).startsWith(this.normalize(regionKeyword))
+    ) {
+      return stationKeyword;
+    }
+
+    return `${regionKeyword} ${stationKeyword}`;
+  }
+
+  private toSearchRegionName(regionName?: string | null) {
+    return regionName?.trim() || null;
+  }
+
+  private toSearchStationAreaName(stationName: string) {
+    return stationName.trim().replace(/역$/, '');
   }
 
   private toSearchStationName(stationName: string) {
