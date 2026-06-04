@@ -17,7 +17,7 @@ describe('PlacesService', () => {
     update: jest.fn(),
     upsert: jest.fn(),
   };
-  const naverLocalClient = {
+  const naverLocalClient: jest.Mocked<Pick<NaverLocalClient, 'searchLocal'>> = {
     searchLocal: jest.fn(),
   };
 
@@ -91,16 +91,13 @@ describe('PlacesService', () => {
     );
 
     expect(result.date).toBe('2026-07-18');
-    expect(result.recommendation).toMatchObject({
-      category: expect.any(String),
-      name: '코엑스아쿠아리움',
-      reason: expect.stringContaining('좋아요'),
-    });
-    expect(naverLocalClient.searchLocal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: expect.stringContaining('서울 삼성'),
-      }),
-    );
+    expect(typeof result.recommendation.category).toBe('string');
+    expect(result.recommendation.name).toBe('코엑스아쿠아리움');
+    expect(result.recommendation.reason).toContain('좋아요');
+
+    const firstSearchParams = naverLocalClient.searchLocal.mock.calls[0]?.[0];
+
+    expect(firstSearchParams?.query).toContain('서울 삼성');
     expect(placeCacheRepository.upsert).toHaveBeenCalled();
   });
 
