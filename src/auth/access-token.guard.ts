@@ -4,9 +4,11 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { AuthTokenService } from './auth-token.service';
 import { CurrentUser } from './current-user.decorator';
+import { IS_PUBLIC_KEY } from './public.decorator';
 
 interface AuthenticatedRequest extends Request {
   user?: CurrentUser;
@@ -14,9 +16,21 @@ interface AuthenticatedRequest extends Request {
 
 @Injectable()
 export class AccessTokenGuard implements CanActivate {
-  constructor(private readonly authTokenService: AuthTokenService) {}
+  constructor(
+    private readonly authTokenService: AuthTokenService,
+    private readonly reflector: Reflector,
+  ) {}
 
   canActivate(context: ExecutionContext) {
+    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    if (isPublic) {
+      return true;
+    }
+
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const token = this.extractBearerToken(request.headers.authorization);
 

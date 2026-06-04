@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { AccessTokenGuard } from '../auth/access-token.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { Public } from '../auth/public.decorator';
 import { DateCoursesService } from './date-courses.service';
 import {
   CalculateDateCourseWalkingSegmentsDto,
@@ -36,6 +37,7 @@ export class DateCoursesController {
   }
 
   @Post('walking-segments/preview')
+  @Public()
   previewWalkingSegments(@Body() dto: CalculateDateCourseWalkingSegmentsDto) {
     return this.dateCoursesService.previewWalkingSegments(dto);
   }
