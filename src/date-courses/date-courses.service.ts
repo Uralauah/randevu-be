@@ -10,9 +10,22 @@ import { User } from '../auth/entities';
 import { SubwayStation } from '../stations/entities';
 import { DateCourse, DateCourseItem, DateCourseParticipant } from './entities';
 import {
+  CalculateDateCourseWalkingSegmentsDto,
   CreateDateCourseDto,
   CreateDateCourseItemDto,
 } from './dto/create-date-course.dto';
+
+const EARTH_RADIUS_METERS = 6_371_000;
+const WALKING_ROUTE_DISTANCE_FACTOR = 1.25;
+const WALKING_SPEED_METERS_PER_MINUTE = 67;
+
+interface WalkingSegmentItem {
+  id: string | null;
+  itemOrder: number;
+  name: string;
+  lat: number | null;
+  lng: number | null;
+}
 
 @Injectable()
 export class DateCoursesService {
@@ -93,6 +106,20 @@ export class DateCoursesService {
     const course = await this.findCourseOrThrow(courseId);
 
     return this.toCourseResponse(course);
+  }
+
+  previewWalkingSegments(dto: CalculateDateCourseWalkingSegmentsDto) {
+    const items = dto.items.map((item) => ({
+      id: item.itemId ?? null,
+      itemOrder: item.itemOrder,
+      name: item.name,
+      lat: item.lat ?? null,
+      lng: item.lng ?? null,
+    }));
+
+    return {
+      walkingSegments: this.buildWalkingSegments(this.sortWalkingItems(items)),
+    };
   }
 
   async remove(courseId: string, userId: string) {
@@ -233,6 +260,8 @@ export class DateCoursesService {
   }
 
   private toCourseResponse(course: DateCourse) {
+    const sortedItems = this.sortWalkingItems(course.items ?? []);
+
     return {
       id: course.id,
       ownerUserId: course.ownerUserId,
@@ -250,24 +279,23 @@ export class DateCoursesService {
             vibeText: course.station.vibeText,
           }
         : null,
-      items: (course.items ?? [])
-        .sort((a, b) => a.itemOrder - b.itemOrder)
-        .map((item) => ({
-          id: item.id,
-          itemType: item.itemType,
-          itemOrder: item.itemOrder,
-          placeKey: item.placeKey,
-          name: item.name,
-          categoryName: item.categoryName,
-          address: item.address,
-          lat: item.lat === null ? null : Number(item.lat),
-          lng: item.lng === null ? null : Number(item.lng),
-          externalLink: item.externalLink,
-          mapLink: item.mapLink,
-          instagramLink: item.instagramLink,
-          reservationLink: item.reservationLink,
-          memo: item.memo,
-        })),
+      items: sortedItems.map((item) => ({
+        id: item.id,
+        itemType: item.itemType,
+        itemOrder: item.itemOrder,
+        placeKey: item.placeKey,
+        name: item.name,
+        categoryName: item.categoryName,
+        address: item.address,
+        lat: item.lat === null ? null : Number(item.lat),
+        lng: item.lng === null ? null : Number(item.lng),
+        externalLink: item.externalLink,
+        mapLink: item.mapLink,
+        instagramLink: item.instagramLink,
+        reservationLink: item.reservationLink,
+        memo: item.memo,
+      })),
+      walkingSegments: this.buildWalkingSegments(sortedItems),
       participants: (course.participants ?? []).map((participant) => ({
         userId: participant.userId,
         role: participant.role,
@@ -276,5 +304,97 @@ export class DateCoursesService {
       createdAt: course.createdAt,
       updatedAt: course.updatedAt,
     };
+  }
+
+  private sortWalkingItems<T extends WalkingSegmentItem>(items: T[]) {
+    return [...items].sort((a, b) => a.itemOrder - b.itemOrder);
+  }
+
+  private buildWalkingSegments(items: WalkingSegmentItem[]) {
+    return items.slice(1).map((item, index) => {
+      const fromItem = items[index];
+      const distanceMeters = this.calculateWalkingDistanceMeters(
+        fromItem,
+        item,
+      );
+
+      return {
+        fromItemId: fromItem.id,
+        fromItemOrder: fromItem.itemOrder,
+        fromItemName: fromItem.name,
+        toItemId: item.id,
+        toItemOrder: item.itemOrder,
+        toItemName: item.name,
+        distanceMeters,
+        estimatedWalkingMinutes:
+          distanceMeters === null
+            ? null
+            : Math.max(
+                1,
+                Math.round(distanceMeters / WALKING_SPEED_METERS_PER_MINUTE),
+              ),
+        calculationMethod:
+          distanceMeters === null ? 'UNAVAILABLE' : 'COORDINATE_ESTIMATE',
+      };
+    });
+  }
+
+  private calculateWalkingDistanceMeters(
+    fromItem: WalkingSegmentItem,
+    toItem: WalkingSegmentItem,
+  ) {
+    const fromCoordinate = this.getCoordinate(fromItem);
+    const toCoordinate = this.getCoordinate(toItem);
+
+    if (!fromCoordinate || !toCoordinate) {
+      return null;
+    }
+
+    const straightLineMeters = this.calculateStraightLineDistanceMeters(
+      fromCoordinate,
+      toCoordinate,
+    );
+
+    return Math.round(straightLineMeters * WALKING_ROUTE_DISTANCE_FACTOR);
+  }
+
+  private getCoordinate(item: WalkingSegmentItem) {
+    const lat = item.lat === null ? null : Number(item.lat);
+    const lng = item.lng === null ? null : Number(item.lng);
+
+    if (
+      lat === null ||
+      lng === null ||
+      !Number.isFinite(lat) ||
+      !Number.isFinite(lng) ||
+      lat < -90 ||
+      lat > 90 ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      return null;
+    }
+
+    return { lat, lng };
+  }
+
+  private calculateStraightLineDistanceMeters(
+    from: { lat: number; lng: number },
+    to: { lat: number; lng: number },
+  ) {
+    const fromLat = this.toRadians(from.lat);
+    const toLat = this.toRadians(to.lat);
+    const deltaLat = this.toRadians(to.lat - from.lat);
+    const deltaLng = this.toRadians(to.lng - from.lng);
+
+    const a =
+      Math.sin(deltaLat / 2) ** 2 +
+      Math.cos(fromLat) * Math.cos(toLat) * Math.sin(deltaLng / 2) ** 2;
+
+    return EARTH_RADIUS_METERS * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  private toRadians(value: number) {
+    return (value * Math.PI) / 180;
   }
 }

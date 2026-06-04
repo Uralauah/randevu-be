@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   ValidateNested,
@@ -82,4 +83,39 @@ export class CreateDateCourseDto {
   @ValidateNested({ each: true })
   @Type(() => CreateDateCourseItemDto)
   items!: CreateDateCourseItemDto[];
+}
+
+export class DateCourseWalkingSegmentItemDto {
+  @IsOptional()
+  @IsString()
+  itemId?: string | null;
+
+  @Type(() => Number)
+  @IsInt()
+  itemOrder!: number;
+
+  @IsOptional()
+  @IsString()
+  placeKey?: string | null;
+
+  @IsString()
+  name!: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  lat?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  lng?: number | null;
+}
+
+export class CalculateDateCourseWalkingSegmentsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => DateCourseWalkingSegmentItemDto)
+  items!: DateCourseWalkingSegmentItemDto[];
 }

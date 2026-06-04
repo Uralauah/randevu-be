@@ -10,7 +10,10 @@ import {
 import { AccessTokenGuard } from '../auth/access-token.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { DateCoursesService } from './date-courses.service';
-import { CreateDateCourseDto } from './dto/create-date-course.dto';
+import {
+  CalculateDateCourseWalkingSegmentsDto,
+  CreateDateCourseDto,
+} from './dto/create-date-course.dto';
 
 @Controller('date-courses')
 @UseGuards(AccessTokenGuard)
@@ -30,6 +33,11 @@ export class DateCoursesController {
   @Get(':id')
   findOne(@CurrentUser() user: CurrentUser, @Param('id') id: string) {
     return this.dateCoursesService.findOne(id, user.id);
+  }
+
+  @Post('walking-segments/preview')
+  previewWalkingSegments(@Body() dto: CalculateDateCourseWalkingSegmentsDto) {
+    return this.dateCoursesService.previewWalkingSegments(dto);
   }
 
   @Delete(':id')
