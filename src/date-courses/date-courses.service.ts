@@ -14,6 +14,7 @@ import {
   CreateDateCourseDto,
   CreateDateCourseItemDto,
 } from './dto/create-date-course.dto';
+import { DateCoursesGateway } from './date-courses.gateway';
 
 const EARTH_RADIUS_METERS = 6_371_000;
 const WALKING_ROUTE_DISTANCE_FACTOR = 1.25;
@@ -44,6 +45,8 @@ export class DateCoursesService {
 
     @InjectRepository(SubwayStation)
     private readonly stationRepository: Repository<SubwayStation>,
+
+    private readonly dateCoursesGateway: DateCoursesGateway,
   ) {}
 
   async create(userId: string, dto: CreateDateCourseDto) {
@@ -179,10 +182,19 @@ export class DateCoursesService {
     });
 
     if (!existingParticipant) {
-      await this.participantRepository.save({
+      const participant = await this.participantRepository.save({
         courseId: course.id,
         userId,
         role: course.ownerUserId === userId ? 'OWNER' : 'PARTNER',
+      });
+
+      this.dateCoursesGateway.emitParticipantJoined({
+        courseId: course.id,
+        participant: {
+          userId: participant.userId,
+          role: participant.role,
+          joinedAt: participant.createdAt,
+        },
       });
     }
 

@@ -5,6 +5,7 @@ import { AuthModule } from '../auth/auth.module';
 import { SubwayStation } from '../stations/entities';
 import { DateCourse, DateCourseItem, DateCourseParticipant } from './entities';
 import { DateCoursesController } from './date-courses.controller';
+import { DateCoursesGateway } from './date-courses.gateway';
 import { DateCoursesService } from './date-courses.service';
 
 @Module({
@@ -19,6 +20,6 @@ import { DateCoursesService } from './date-courses.service';
     ]),
   ],
   controllers: [DateCoursesController],
-  providers: [DateCoursesService],
+  providers: [DateCoursesService, DateCoursesGateway],
 })
 export class DateCoursesModule {}

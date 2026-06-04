@@ -1,19 +1,32 @@
 import { Repository } from 'typeorm';
 import { User } from '../auth/entities';
 import { SubwayStation } from '../stations/entities';
+import { DateCoursesGateway } from './date-courses.gateway';
 import { DateCoursesService } from './date-courses.service';
 import { DateCourse, DateCourseItem, DateCourseParticipant } from './entities';
 
 describe('DateCoursesService', () => {
   let service: DateCoursesService;
+  let courseRepository: MockRepository<DateCourse>;
+  let participantRepository: MockRepository<DateCourseParticipant>;
+  let userRepository: MockRepository<User>;
+  let dateCoursesGateway: Pick<DateCoursesGateway, 'emitParticipantJoined'>;
 
   beforeEach(() => {
+    courseRepository = mockRepository<DateCourse>();
+    participantRepository = mockRepository<DateCourseParticipant>();
+    userRepository = mockRepository<User>();
+    dateCoursesGateway = {
+      emitParticipantJoined: jest.fn(),
+    };
+
     service = new DateCoursesService(
-      mockRepository<DateCourse>(),
+      courseRepository,
       mockRepository<DateCourseItem>(),
-      mockRepository<DateCourseParticipant>(),
-      mockRepository<User>(),
+      participantRepository,
+      userRepository,
       mockRepository<SubwayStation>(),
+      dateCoursesGateway as DateCoursesGateway,
     );
   });
 
@@ -119,6 +132,49 @@ describe('DateCoursesService', () => {
       });
     });
   });
+
+  describe('acceptInvite', () => {
+    it('emits a socket event when a new participant joins', async () => {
+      const course = {
+        id: 'course-id',
+        ownerUserId: 'owner-id',
+        inviteToken: 'invite-token',
+        inviteExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
+      } as DateCourse;
+      const participant = {
+        courseId: course.id,
+        userId: 'partner-id',
+        role: 'PARTNER',
+        createdAt: new Date('2026-06-04T00:00:00.000Z'),
+      } as DateCourseParticipant;
+
+      userRepository.exists.mockResolvedValue(true);
+      courseRepository.findOne
+        .mockResolvedValueOnce(course)
+        .mockResolvedValueOnce({
+          ...course,
+          station: null,
+          items: [],
+          participants: [participant],
+          createdAt: new Date('2026-06-04T00:00:00.000Z'),
+          updatedAt: new Date('2026-06-04T00:00:00.000Z'),
+        } as DateCourse);
+      participantRepository.findOne.mockResolvedValueOnce(null);
+      participantRepository.save.mockResolvedValueOnce(participant);
+      participantRepository.findOne.mockResolvedValueOnce(participant);
+
+      await service.acceptInvite('invite-token', 'partner-id');
+
+      expect(dateCoursesGateway.emitParticipantJoined).toHaveBeenCalledWith({
+        courseId: course.id,
+        participant: {
+          userId: 'partner-id',
+          role: 'PARTNER',
+          joinedAt: participant.createdAt,
+        },
+      });
+    });
+  });
 });
 
 function callToCourseResponse(
@@ -176,6 +232,23 @@ function createCourseItem(params: {
   } as DateCourseItem;
 }
 
+type MockRepository<T extends object> = {
+  [K in keyof Repository<T>]: Repository<T>[K] extends (
+    ...args: infer A
+  ) => infer R
+    ? jest.Mock<R, A>
+    : Repository<T>[K];
+};
+
 function mockRepository<T extends object>() {
-  return {} as Repository<T>;
+  return {
+    count: jest.fn(),
+    create: jest.fn((entity: T) => entity),
+    delete: jest.fn(),
+    exists: jest.fn(),
+    find: jest.fn(),
+    findOne: jest.fn(),
+    save: jest.fn((entity: T) => entity),
+    update: jest.fn(),
+  } as unknown as MockRepository<T>;
 }
