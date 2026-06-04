@@ -30,6 +30,7 @@ import {
   DateCourseParticipant,
 } from './date-courses/entities';
 import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { AuthModule } from './auth/auth.module';
     PlacesModule,
     DateCoursesModule,
     AuthModule,
+    UsersModule,
   ],
   controllers: [AppController],
   providers: [AppService],

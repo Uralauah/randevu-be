@@ -44,6 +44,9 @@ export class AuthService {
 
     const user = await this.userRepository.save({
       nickname: profile.nickname,
+      defaultRegionCode: null,
+      defaultStationId: null,
+      maxMinutes: null,
     });
 
     await this.socialAccountRepository.save({
@@ -70,6 +73,9 @@ export class AuthService {
     return {
       id: user.id,
       nickname: user.nickname,
+      defaultRegionCode: user.defaultRegionCode ?? null,
+      defaultStationId: user.defaultStationId ?? null,
+      maxMinutes: user.maxMinutes ?? null,
       socialAccounts: user.socialAccounts.map((account) => ({
         provider: account.provider,
         providerId: account.providerId,
@@ -310,6 +316,9 @@ export class AuthService {
       user: {
         id: user.id,
         nickname: user.nickname,
+        defaultRegionCode: user.defaultRegionCode ?? null,
+        defaultStationId: user.defaultStationId ?? null,
+        maxMinutes: user.maxMinutes ?? null,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },
