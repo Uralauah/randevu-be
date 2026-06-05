@@ -1602,18 +1602,31 @@ export class PlacesService {
     stationName: string,
     dateContext: DateRecommendationContext,
   ) {
+    const snippet = this.extractReasonSnippet(place);
+    if (snippet) return snippet;
+
     const dateReason = this.getShortDateReason(dateContext);
     const typeReason = this.getShortTypeReason(place.type);
-
-    if (this.isDateLimitedEventPlace(place, dateContext)) {
-      return `${this.toSearchStationName(stationName)} 근처에서 선택한 날짜에 맞는 팝업이나 기간한정 이벤트로 우선 추천돼요.`;
-    }
-
-    if (this.isDatePriorityPlace(place, dateContext)) {
-      return `${this.toSearchStationName(stationName)} 근처에서 선택한 날짜에 맞는 인기 장소로 추천돼요.`;
-    }
-
     return `${this.toSearchStationName(stationName)} 근처에서 ${dateReason} ${typeReason} 좋아요.`;
+  }
+
+  private extractReasonSnippet(place: PlaceResponse): string | null {
+    const desc = place.description?.trim();
+    if (!desc || desc.length < 8) return null;
+
+    const MAX = 80;
+
+    // 첫 문장 끝 마커 위치
+    const sentenceEnd = desc.search(/[.!?。]/);
+    if (sentenceEnd > 5 && sentenceEnd <= MAX) {
+      return desc.slice(0, sentenceEnd + 1);
+    }
+
+    if (desc.length <= MAX) return desc;
+
+    // 단어 경계에서 자르기
+    const cut = desc.lastIndexOf(' ', MAX);
+    return desc.slice(0, cut > 20 ? cut : MAX) + '…';
   }
 
   private isDatePriorityPlace(
