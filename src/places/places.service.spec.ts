@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DateCourseItem } from '../date-courses/entities';
 import { SubwayStation } from '../stations/entities';
 import { PlaceCache } from './entities';
 import { NaverBlogClient } from './naver-blog.client';
@@ -16,6 +17,9 @@ describe('PlacesService', () => {
     findOne: jest.fn(),
     update: jest.fn(),
     upsert: jest.fn(),
+  };
+  const dateCourseItemRepository = {
+    find: jest.fn(),
   };
   const naverLocalClient: jest.Mocked<Pick<NaverLocalClient, 'searchLocal'>> = {
     searchLocal: jest.fn(),
@@ -39,6 +43,10 @@ describe('PlacesService', () => {
           useValue: placeCacheRepository,
         },
         {
+          provide: getRepositoryToken(DateCourseItem),
+          useValue: dateCourseItemRepository,
+        },
+        {
           provide: NaverLocalClient,
           useValue: naverLocalClient,
         },
@@ -57,6 +65,7 @@ describe('PlacesService', () => {
 
     service = module.get<PlacesService>(PlacesService);
     naverBlogClient.searchBlogs.mockResolvedValue([]);
+    dateCourseItemRepository.find.mockResolvedValue([]);
   });
 
   it('should be defined', () => {
@@ -166,6 +175,65 @@ describe('PlacesService', () => {
         params.query.includes('2026년 7월'),
       ),
     ).toBe(true);
+  });
+
+  it('excludes places already included in the date course from date recommendations', async () => {
+    stationRepository.findOne.mockResolvedValue({
+      id: 12,
+      name: '성수',
+      lat: 37.5446,
+      lng: 127.0558,
+      region: {
+        name: '서울',
+      },
+    });
+    dateCourseItemRepository.find.mockResolvedValue([
+      {
+        courseId: 'course-id',
+        placeKey: 'naver:100',
+        name: '이미 담긴 팝업',
+        address: '서울 성동구 테스트로 100',
+        lat: 37.5447,
+        lng: 127.0559,
+      },
+    ]);
+    naverLocalClient.searchLocal.mockImplementation(async ({ query }) => {
+      if (!query.includes('팝업')) {
+        return [];
+      }
+
+      return [
+        createNaverLocalItem({
+          id: 100,
+          title: '이미 담긴 팝업',
+          lat: 37.5447,
+          lng: 127.0559,
+          category: '문화,예술 > 팝업스토어',
+          description: '2026년 6월 기간한정 팝업 이벤트',
+        }),
+        createNaverLocalItem({
+          id: 101,
+          title: '새로운 팝업',
+          lat: 37.5448,
+          lng: 127.056,
+          category: '문화,예술 > 팝업스토어',
+          description: '2026년 6월 기간한정 팝업 이벤트',
+        }),
+      ];
+    });
+
+    const result = await service.recommendPlaceByStationAndDate(
+      12,
+      '2026-06-05',
+      'course-id',
+    );
+
+    expect(dateCourseItemRepository.find).toHaveBeenCalledWith({
+      where: {
+        courseId: 'course-id',
+      },
+    });
+    expect(result.recommendation.name).toBe('새로운 팝업');
   });
 
   it('discovers date event candidates from blogs and matches them with local places', async () => {

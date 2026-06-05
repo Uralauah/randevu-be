@@ -42,6 +42,13 @@ interface BlogDateEvent {
   link: string | null;
 }
 
+interface CoursePlaceExclusions {
+  placeKeys: Set<string>;
+  nameAddressKeys: Set<string>;
+  nameCoordinateKeys: Set<string>;
+  nameKeys: Set<string>;
+}
+
 interface DateRecommendationContext {
   date: string;
   year: number;
@@ -92,6 +99,7 @@ export class PlacesService {
     stationId: number,
     type: PlaceType,
     mealTime?: MealTime,
+    excludedPlaceKeys?: string,
   ) {
     this.validatePlaceType(type);
     this.validateMealTime(type, mealTime);
@@ -107,7 +115,10 @@ export class PlacesService {
       throw new NotFoundException('역을 찾을 수 없습니다.');
     }
 
-    const places = await this.searchPlaces(station, type, mealTime);
+    const exclusions = this.buildExclusionsFromPlaceKeys(
+      this.parseCommaSeparated(excludedPlaceKeys),
+    );
+    const places = await this.searchPlaces(station, type, mealTime, exclusions);
 
     return {
       station: {
@@ -126,6 +137,7 @@ export class PlacesService {
   async recommendPlaceByStationAndDate(
     stationId: number,
     date: string,
+    excludedPlaceKeys?: string,
   ): Promise<PlaceDateRecommendationResponse> {
     const dateContext = this.parseDateRecommendationContext(date);
     const station = await this.stationRepository.findOne({
@@ -139,6 +151,9 @@ export class PlacesService {
       throw new NotFoundException('역을 찾을 수 없습니다.');
     }
 
+    const exclusions = this.buildExclusionsFromPlaceKeys(
+      this.parseCommaSeparated(excludedPlaceKeys),
+    );
     const recommendationGroups: PlaceResponse[][] = [];
 
     for (const type of DATE_RECOMMENDATION_TYPE_ORDER) {
@@ -153,15 +168,20 @@ export class PlacesService {
           : [];
 
       if (blogCandidates.length > 0) {
-        const places = this.rankPlaces(blogCandidates, type).map((place) => ({
+        const places = this.rankPlaces(
+          this.filterExcludedPlaces(blogCandidates, exclusions),
+          type,
+        ).map((place) => ({
           ...place,
           recommendationScore:
             (place.recommendationScore ?? 0) +
             this.scorePlaceByDateContext(place, dateContext),
         }));
 
-        recommendationGroups.push(places);
-        break;
+        if (places.length > 0) {
+          recommendationGroups.push(places);
+          break;
+        }
       }
 
       const priorityQueries = this.buildDatePrioritySearchQueries(
@@ -174,8 +194,11 @@ export class PlacesService {
         candidates,
         station,
       );
-      let selectedCandidates = nearbyCandidates.filter((place) =>
-        this.isDateEventSearchCandidate(place, dateContext),
+      let selectedCandidates = this.filterExcludedPlaces(
+        nearbyCandidates.filter((place) =>
+          this.isDateEventSearchCandidate(place, dateContext),
+        ),
+        exclusions,
       );
 
       if (selectedCandidates.length === 0) {
@@ -190,7 +213,10 @@ export class PlacesService {
           candidates,
           station,
         );
-        selectedCandidates = nearbyCandidates;
+        selectedCandidates = this.filterExcludedPlaces(
+          nearbyCandidates,
+          exclusions,
+        );
       }
 
       const places = this.rankPlaces(selectedCandidates, type).map((place) => ({
@@ -299,10 +325,103 @@ export class PlacesService {
     );
   }
 
+  private buildExclusionsFromPlaceKeys(
+    placeKeys: string[],
+  ): CoursePlaceExclusions {
+    const exclusions = this.createEmptyCoursePlaceExclusions();
+
+    for (const key of placeKeys) {
+      exclusions.placeKeys.add(key);
+    }
+
+    return exclusions;
+  }
+
+  private parseCommaSeparated(value?: string): string[] {
+    if (!value?.trim()) {
+      return [];
+    }
+
+    return value
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+  }
+
+  private createEmptyCoursePlaceExclusions(): CoursePlaceExclusions {
+    return {
+      placeKeys: new Set(),
+      nameAddressKeys: new Set(),
+      nameCoordinateKeys: new Set(),
+      nameKeys: new Set(),
+    };
+  }
+
+
+  private filterExcludedPlaces<T extends PlaceResponse>(
+    places: T[],
+    exclusions: CoursePlaceExclusions,
+  ) {
+    if (
+      exclusions.placeKeys.size === 0 &&
+      exclusions.nameAddressKeys.size === 0 &&
+      exclusions.nameCoordinateKeys.size === 0 &&
+      exclusions.nameKeys.size === 0
+    ) {
+      return places;
+    }
+
+    return places.filter(
+      (place) => !this.isExcludedCoursePlace(place, exclusions),
+    );
+  }
+
+  private isExcludedCoursePlace(
+    place: PlaceResponse,
+    exclusions: CoursePlaceExclusions,
+  ) {
+    if (exclusions.placeKeys.has(place.placeKey)) {
+      return true;
+    }
+
+    if (
+      place.address &&
+      exclusions.nameAddressKeys.has(
+        this.createNameAddressKey(place.name, place.address),
+      )
+    ) {
+      return true;
+    }
+
+    const coordinates = this.toValidCoordinates(place);
+
+    if (
+      coordinates &&
+      exclusions.nameCoordinateKeys.has(
+        this.createNameCoordinateKey(place.name, coordinates),
+      )
+    ) {
+      return true;
+    }
+
+    return exclusions.nameKeys.has(this.normalize(place.name));
+  }
+
+  private createNameAddressKey(name: string, address: string) {
+    return `${this.normalize(name)}:${this.normalize(address)}`;
+  }
+
+  private createNameCoordinateKey(name: string, coordinates: Coordinates) {
+    return `${this.normalize(name)}:${coordinates.lat.toFixed(
+      5,
+    )}:${coordinates.lng.toFixed(5)}`;
+  }
+
   private async searchPlaces(
     station: SubwayStation,
     type: PlaceType,
     mealTime?: MealTime,
+    exclusions = this.createEmptyCoursePlaceExclusions(),
   ): Promise<PlaceResponse[]> {
     const queries = this.buildSearchQueries(station, type, mealTime);
     const candidates = await this.fetchNaverCandidates(queries, type);
@@ -310,7 +429,11 @@ export class PlacesService {
       candidates,
       station,
     );
-    const rankedPlaces = this.rankPlaces(nearbyCandidates, type, mealTime);
+    const availableCandidates = this.filterExcludedPlaces(
+      nearbyCandidates,
+      exclusions,
+    );
+    const rankedPlaces = this.rankPlaces(availableCandidates, type, mealTime);
 
     const qualifiedPlaces = rankedPlaces.filter(
       (place) =>

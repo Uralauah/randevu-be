@@ -31,6 +31,14 @@ interface WalkingSegmentItem {
   lng: number | null;
 }
 
+interface CoursePlaceIdentityItem {
+  placeKey?: string | null;
+  name?: string | null;
+  address?: string | null;
+  lat?: number | string | null;
+  lng?: number | string | null;
+}
+
 @Injectable()
 export class DateCoursesService {
   constructor(
@@ -55,6 +63,8 @@ export class DateCoursesService {
   async create(userId: string, dto: CreateDateCourseDto) {
     await this.assertUserExists(userId);
     await this.assertStationExists(dto.stationId);
+    this.assertUniqueItemOrders(dto.items);
+    this.assertUniqueCoursePlaces(dto.items);
 
     const course = this.courseRepository.create({
       ownerUserId: userId,
@@ -309,6 +319,7 @@ export class DateCoursesService {
     }
 
     if (itemsToSave.length > 0) {
+      this.assertUniqueCoursePlaces(itemsToSave);
       await this.itemRepository.save(itemsToSave);
     }
   }
@@ -323,6 +334,66 @@ export class DateCoursesService {
 
       itemOrders.add(item.itemOrder);
     }
+  }
+
+  private assertUniqueCoursePlaces(items: CoursePlaceIdentityItem[]) {
+    const seenKeys = new Set<string>();
+
+    for (const item of items) {
+      const identityKeys = this.getCoursePlaceIdentityKeys(item);
+
+      for (const key of identityKeys) {
+        if (seenKeys.has(key)) {
+          throw new BadRequestException('이미 코스에 포함된 장소입니다.');
+        }
+      }
+
+      for (const key of identityKeys) {
+        seenKeys.add(key);
+      }
+    }
+  }
+
+  private getCoursePlaceIdentityKeys(item: CoursePlaceIdentityItem) {
+    const keys: string[] = [];
+    const nameKey = this.normalizeCoursePlaceIdentity(item.name ?? '');
+
+    if (item.placeKey) {
+      keys.push(`placeKey:${item.placeKey}`);
+    }
+
+    if (!nameKey) {
+      return keys;
+    }
+
+    if (item.address) {
+      keys.push(
+        `nameAddress:${nameKey}:${this.normalizeCoursePlaceIdentity(
+          item.address,
+        )}`,
+      );
+    }
+
+    const coordinates = this.getCoordinate({
+      lat: item.lat === undefined ? null : item.lat,
+      lng: item.lng === undefined ? null : item.lng,
+    });
+
+    if (coordinates) {
+      keys.push(
+        `nameCoordinate:${nameKey}:${coordinates.lat.toFixed(
+          5,
+        )}:${coordinates.lng.toFixed(5)}`,
+      );
+    }
+
+    keys.push(`name:${nameKey}`);
+
+    return keys;
+  }
+
+  private normalizeCoursePlaceIdentity(value: string) {
+    return value.toLowerCase().replace(/\s+/g, '');
   }
 
   private toCreateDateCourseItemDto(
@@ -508,7 +579,10 @@ export class DateCoursesService {
     return Math.round(straightLineMeters * WALKING_ROUTE_DISTANCE_FACTOR);
   }
 
-  private getCoordinate(item: WalkingSegmentItem) {
+  private getCoordinate(item: {
+    lat: number | string | null;
+    lng: number | string | null;
+  }) {
     const lat = item.lat === null ? null : Number(item.lat);
     const lng = item.lng === null ? null : Number(item.lng);
 

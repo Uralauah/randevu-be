@@ -11,16 +11,27 @@ export class PlacesController {
     @Param('stationId', ParseIntPipe) stationId: number,
     @Query('type') type: PlaceType,
     @Query('mealTime') mealTime?: MealTime,
+    @Query('excludedPlaceKeys') excludedPlaceKeys?: string,
   ) {
-    return this.placesService.findPlacesByStation(stationId, type, mealTime);
+    return this.placesService.findPlacesByStation(
+      stationId,
+      type,
+      mealTime,
+      excludedPlaceKeys,
+    );
   }
 
   @Get('stations/:stationId/place-recommendation')
   recommendPlace(
     @Param('stationId', ParseIntPipe) stationId: number,
     @Query('date') date: string,
+    @Query('excludedPlaceKeys') excludedPlaceKeys?: string,
   ) {
-    return this.placesService.recommendPlaceByStationAndDate(stationId, date);
+    return this.placesService.recommendPlaceByStationAndDate(
+      stationId,
+      date,
+      excludedPlaceKeys,
+    );
   }
 
   @Get('places/:placeKey')

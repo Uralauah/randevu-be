@@ -11,6 +11,7 @@ describe('DateCoursesService', () => {
   let itemRepository: MockRepository<DateCourseItem>;
   let participantRepository: MockRepository<DateCourseParticipant>;
   let userRepository: MockRepository<User>;
+  let stationRepository: MockRepository<SubwayStation>;
   let dateCoursesGateway: Pick<
     DateCoursesGateway,
     'emitParticipantJoined' | 'emitCourseUpdated'
@@ -21,6 +22,7 @@ describe('DateCoursesService', () => {
     itemRepository = mockRepository<DateCourseItem>();
     participantRepository = mockRepository<DateCourseParticipant>();
     userRepository = mockRepository<User>();
+    stationRepository = mockRepository<SubwayStation>();
     dateCoursesGateway = {
       emitParticipantJoined: jest.fn(),
       emitCourseUpdated: jest.fn(),
@@ -31,9 +33,42 @@ describe('DateCoursesService', () => {
       itemRepository,
       participantRepository,
       userRepository,
-      mockRepository<SubwayStation>(),
+      stationRepository,
       dateCoursesGateway as DateCoursesGateway,
     );
+  });
+
+  describe('create', () => {
+    it('rejects duplicate places in a course', async () => {
+      userRepository.exists.mockResolvedValue(true);
+      stationRepository.exists.mockResolvedValue(true);
+
+      await expect(
+        service.create('user-id', {
+          date: '2026-06-05',
+          stationId: 32,
+          title: '데이트 코스',
+          items: [
+            {
+              itemType: 'ACTIVITY',
+              itemOrder: 1,
+              placeKey: 'naver:100',
+              name: '성수 팝업',
+              address: '서울 성동구 테스트로 100',
+            },
+            {
+              itemType: 'ACTIVITY',
+              itemOrder: 2,
+              placeKey: 'naver:100',
+              name: '성수 팝업',
+              address: '서울 성동구 테스트로 100',
+            },
+          ],
+        }),
+      ).rejects.toThrow('이미 코스에 포함된 장소입니다.');
+
+      expect(courseRepository.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('toCourseResponse', () => {

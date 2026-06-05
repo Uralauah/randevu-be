@@ -10,7 +10,9 @@ import { PlaceTagService } from './place-tag.service';
 import { PlaceCache } from './entities';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([SubwayStation, PlaceCache])],
+  imports: [
+    TypeOrmModule.forFeature([SubwayStation, PlaceCache]),
+  ],
   controllers: [PlacesController],
   providers: [
     PlacesService,
