@@ -60,9 +60,9 @@ interface DateRecommendationContext {
 }
 
 const RESPONSE_LIMIT_BY_TYPE: Record<PlaceType, number> = {
-  RESTAURANT: 20,
-  CAFE: 20,
-  ACTIVITY: 20,
+  RESTAURANT: 40,
+  CAFE: 40,
+  ACTIVITY: 40,
 };
 
 const NAVER_DISPLAY_PER_QUERY = 5;
@@ -70,6 +70,10 @@ const NAVER_BLOG_DISPLAY_PER_QUERY = 5;
 const PLACE_DISTANCE_LIMIT_METERS = 2_000;
 const EARTH_RADIUS_METERS = 6_371_000;
 const NAVER_LOCAL_QUERY_DELAY_MS = 150;
+const NAVER_QUERY_CONCURRENCY = 4;
+const PLACE_LIST_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+const RECOMMENDATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const BLOG_QUERY_CONCURRENCY = 4;
 const BLOG_EVENT_NAME_LIMIT = 8;
 const DATE_RECOMMENDATION_TYPE_ORDER: PlaceType[] = [
   'ACTIVITY',
@@ -80,6 +84,8 @@ const DATE_RECOMMENDATION_TYPE_ORDER: PlaceType[] = [
 @Injectable()
 export class PlacesService {
   private readonly logger = new Logger(PlacesService.name);
+  private readonly placeListCache = new Map<string, { places: PlaceResponse[]; expiresAt: number }>();
+  private readonly recommendationCache = new Map<string, { candidates: PlaceResponse[]; expiresAt: number }>();
 
   constructor(
     @InjectRepository(SubwayStation)
@@ -118,7 +124,16 @@ export class PlacesService {
     const exclusions = this.buildExclusionsFromPlaceKeys(
       this.parseCommaSeparated(excludedPlaceKeys),
     );
-    const places = await this.searchPlaces(station, type, mealTime, exclusions);
+
+    const cacheKey = `${stationId}:${type}:${mealTime ?? 'none'}`;
+    let allPlaces = this.getPlaceListCache(cacheKey);
+
+    if (!allPlaces) {
+      allPlaces = await this.searchPlaces(station, type, mealTime);
+      this.setPlaceListCache(cacheKey, allPlaces);
+    }
+
+    const places = this.filterExcludedPlaces(allPlaces, exclusions);
 
     return {
       station: {
@@ -154,137 +169,23 @@ export class PlacesService {
     const exclusions = this.buildExclusionsFromPlaceKeys(
       this.parseCommaSeparated(excludedPlaceKeys),
     );
-    const recommendationGroups: PlaceResponse[][] = [];
 
-    for (const type of DATE_RECOMMENDATION_TYPE_ORDER) {
-      const base = this.toSearchLocationName(station);
-      const blogCandidates =
-        type === 'ACTIVITY'
-          ? await this.fetchDateEventCandidatesFromBlogs(
-              station,
-              base,
-              dateContext,
-            )
-          : [];
+    const cacheKey = `rec:${stationId}:${date}`;
+    let sortedCandidates = this.getRecommendationCache(cacheKey);
 
-      if (blogCandidates.length > 0) {
-        const places = this.rankPlaces(
-          this.filterExcludedPlaces(blogCandidates, exclusions),
-          type,
-        ).map((place) => ({
-          ...place,
-          recommendationScore:
-            (place.recommendationScore ?? 0) +
-            this.scorePlaceByDateContext(place, dateContext),
-        }));
-
-        if (places.length > 0) {
-          recommendationGroups.push(places);
-          break;
-        }
-      }
-
-      const priorityQueries = this.buildDatePrioritySearchQueries(
-        base,
-        type,
+    if (!sortedCandidates) {
+      sortedCandidates = await this.buildRecommendationCandidates(
+        station,
         dateContext,
       );
-      let candidates = await this.fetchNaverCandidates(priorityQueries, type);
-      let nearbyCandidates = this.filterPlacesWithinStationDistance(
-        candidates,
-        station,
-      );
-      let selectedCandidates = this.filterExcludedPlaces(
-        nearbyCandidates.filter((place) =>
-          this.isDateEventSearchCandidate(place, dateContext),
-        ),
-        exclusions,
-      );
-
-      if (selectedCandidates.length === 0) {
-        const fallbackQueries =
-          this.buildDateRecommendationFallbackSearchQueries(
-            station,
-            type,
-            dateContext,
-          );
-        candidates = await this.fetchNaverCandidates(fallbackQueries, type);
-        nearbyCandidates = this.filterPlacesWithinStationDistance(
-          candidates,
-          station,
-        );
-        selectedCandidates = this.filterExcludedPlaces(
-          nearbyCandidates,
-          exclusions,
-        );
-      }
-
-      const places = this.rankPlaces(selectedCandidates, type).map((place) => ({
-        ...place,
-        recommendationScore:
-          (place.recommendationScore ?? 0) +
-          this.scorePlaceByDateContext(place, dateContext),
-      }));
-
-      recommendationGroups.push(places);
-
-      if (type === 'ACTIVITY' && places.length > 0) {
-        break;
-      }
+      this.setRecommendationCache(cacheKey, sortedCandidates);
     }
 
-    const sortedRecommendations = recommendationGroups.flat().sort((a, b) => {
-      const dateLimitedEventDiff =
-        Number(this.isDateLimitedEventPlace(b, dateContext)) -
-        Number(this.isDateLimitedEventPlace(a, dateContext));
-
-      if (dateLimitedEventDiff !== 0) {
-        return dateLimitedEventDiff;
-      }
-
-      const activityTypeDiff =
-        Number(b.type === 'ACTIVITY') - Number(a.type === 'ACTIVITY');
-
-      if (activityTypeDiff !== 0) {
-        return activityTypeDiff;
-      }
-
-      const coordinateDiff =
-        Number(this.toValidCoordinates(b) !== null) -
-        Number(this.toValidCoordinates(a) !== null);
-
-      if (coordinateDiff !== 0) {
-        return coordinateDiff;
-      }
-
-      const scoreDiff =
-        (b.recommendationScore ?? 0) - (a.recommendationScore ?? 0);
-
-      if (scoreDiff !== 0) {
-        return scoreDiff;
-      }
-
-      const matchedQueryDiff =
-        (b.matchedQueries?.length ?? 0) - (a.matchedQueries?.length ?? 0);
-
-      if (matchedQueryDiff !== 0) {
-        return matchedQueryDiff;
-      }
-
-      const aDistance = a.distanceMeters ?? Number.POSITIVE_INFINITY;
-      const bDistance = b.distanceMeters ?? Number.POSITIVE_INFINITY;
-
-      return aDistance - bDistance;
-    });
-    this.logDateRecommendationCandidates(sortedRecommendations);
-
-    const recommendations = sortedRecommendations.filter(
-      (place) =>
-        place.recommendationScore !== undefined &&
-        place.recommendationScore > 0,
+    const available = this.filterExcludedPlaces(sortedCandidates, exclusions);
+    const recommendations = available.filter(
+      (place) => (place.recommendationScore ?? 0) > 0,
     );
-
-    const recommendation = recommendations[0] ?? sortedRecommendations[0];
+    const recommendation = recommendations[0] ?? available[0];
 
     if (!recommendation) {
       throw new NotFoundException('추천할 장소를 찾을 수 없습니다.');
@@ -311,6 +212,100 @@ export class PlacesService {
         ),
       },
     };
+  }
+
+  private async buildRecommendationCandidates(
+    station: SubwayStation,
+    dateContext: DateRecommendationContext,
+  ): Promise<PlaceResponse[]> {
+    const recommendationGroups: PlaceResponse[][] = [];
+
+    for (const type of DATE_RECOMMENDATION_TYPE_ORDER) {
+      const base = this.toSearchLocationName(station);
+      const blogCandidates =
+        type === 'ACTIVITY'
+          ? await this.fetchDateEventCandidatesFromBlogs(station, base, dateContext)
+          : [];
+
+      if (blogCandidates.length > 0) {
+        const places = this.rankPlaces(blogCandidates, type).map((place) => ({
+          ...place,
+          recommendationScore:
+            (place.recommendationScore ?? 0) +
+            this.scorePlaceByDateContext(place, dateContext),
+        }));
+
+        if (places.length > 0) {
+          recommendationGroups.push(places);
+          break;
+        }
+      }
+
+      const priorityQueries = this.buildDatePrioritySearchQueries(base, type, dateContext);
+      let candidates = await this.fetchNaverCandidates(priorityQueries, type);
+      let nearbyCandidates = this.filterPlacesWithinStationDistance(candidates, station);
+      let selectedCandidates = nearbyCandidates.filter((place) =>
+        this.isDateEventSearchCandidate(place, dateContext),
+      );
+
+      if (selectedCandidates.length === 0) {
+        const fallbackQueries = this.buildDateRecommendationFallbackSearchQueries(
+          station,
+          type,
+          dateContext,
+        );
+        candidates = await this.fetchNaverCandidates(fallbackQueries, type);
+        nearbyCandidates = this.filterPlacesWithinStationDistance(candidates, station);
+        selectedCandidates = nearbyCandidates;
+      }
+
+      const places = this.rankPlaces(selectedCandidates, type).map((place) => ({
+        ...place,
+        recommendationScore:
+          (place.recommendationScore ?? 0) +
+          this.scorePlaceByDateContext(place, dateContext),
+      }));
+
+      recommendationGroups.push(places);
+
+      if (type === 'ACTIVITY' && places.length > 0) {
+        break;
+      }
+    }
+
+    const sortedCandidates = recommendationGroups.flat().sort((a, b) => {
+      const dateLimitedEventDiff =
+        Number(this.isDateLimitedEventPlace(b, dateContext)) -
+        Number(this.isDateLimitedEventPlace(a, dateContext));
+
+      if (dateLimitedEventDiff !== 0) return dateLimitedEventDiff;
+
+      const activityTypeDiff =
+        Number(b.type === 'ACTIVITY') - Number(a.type === 'ACTIVITY');
+
+      if (activityTypeDiff !== 0) return activityTypeDiff;
+
+      const coordinateDiff =
+        Number(this.toValidCoordinates(b) !== null) -
+        Number(this.toValidCoordinates(a) !== null);
+
+      if (coordinateDiff !== 0) return coordinateDiff;
+
+      const scoreDiff = (b.recommendationScore ?? 0) - (a.recommendationScore ?? 0);
+
+      if (scoreDiff !== 0) return scoreDiff;
+
+      const matchedQueryDiff =
+        (b.matchedQueries?.length ?? 0) - (a.matchedQueries?.length ?? 0);
+
+      if (matchedQueryDiff !== 0) return matchedQueryDiff;
+
+      return (a.distanceMeters ?? Infinity) - (b.distanceMeters ?? Infinity);
+    });
+
+    this.logDateRecommendationCandidates(sortedCandidates);
+
+    return sortedCandidates;
   }
 
   private logDateRecommendationCandidates(places: PlaceResponse[]) {
@@ -346,6 +341,48 @@ export class PlacesService {
       .split(',')
       .map((v) => v.trim())
       .filter(Boolean);
+  }
+
+  private getRecommendationCache(key: string): PlaceResponse[] | null {
+    const entry = this.recommendationCache.get(key);
+
+    if (!entry) return null;
+
+    if (Date.now() > entry.expiresAt) {
+      this.recommendationCache.delete(key);
+      return null;
+    }
+
+    return entry.candidates;
+  }
+
+  private setRecommendationCache(key: string, candidates: PlaceResponse[]): void {
+    this.recommendationCache.set(key, {
+      candidates,
+      expiresAt: Date.now() + RECOMMENDATION_CACHE_TTL_MS,
+    });
+  }
+
+  private getPlaceListCache(key: string): PlaceResponse[] | null {
+    const entry = this.placeListCache.get(key);
+
+    if (!entry) {
+      return null;
+    }
+
+    if (Date.now() > entry.expiresAt) {
+      this.placeListCache.delete(key);
+      return null;
+    }
+
+    return entry.places;
+  }
+
+  private setPlaceListCache(key: string, places: PlaceResponse[]): void {
+    this.placeListCache.set(key, {
+      places,
+      expiresAt: Date.now() + PLACE_LIST_CACHE_TTL_MS,
+    });
   }
 
   private createEmptyCoursePlaceExclusions(): CoursePlaceExclusions {
@@ -421,7 +458,6 @@ export class PlacesService {
     station: SubwayStation,
     type: PlaceType,
     mealTime?: MealTime,
-    exclusions = this.createEmptyCoursePlaceExclusions(),
   ): Promise<PlaceResponse[]> {
     const queries = this.buildSearchQueries(station, type, mealTime);
     const candidates = await this.fetchNaverCandidates(queries, type);
@@ -429,20 +465,19 @@ export class PlacesService {
       candidates,
       station,
     );
-    const availableCandidates = this.filterExcludedPlaces(
-      nearbyCandidates,
-      exclusions,
-    );
-    const rankedPlaces = this.rankPlaces(availableCandidates, type, mealTime);
+    const rankedPlaces = this.rankPlaces(nearbyCandidates, type, mealTime);
 
     const qualifiedPlaces = rankedPlaces.filter(
-      (place) =>
-        place.recommendationScore !== undefined &&
-        place.recommendationScore > 0,
+      (place) => (place.recommendationScore ?? 0) > 0,
+    );
+    const decentPlaces = rankedPlaces.filter(
+      (place) => (place.recommendationScore ?? 0) >= 0,
     );
 
     const finalPlaces =
-      qualifiedPlaces.length >= 5 ? qualifiedPlaces : rankedPlaces;
+      qualifiedPlaces.length >= 5 ? qualifiedPlaces :
+      decentPlaces.length >= 5 ? decentPlaces :
+      rankedPlaces;
 
     const selectedPlaces = finalPlaces.slice(0, RESPONSE_LIMIT_BY_TYPE[type]);
 
@@ -473,20 +508,25 @@ export class PlacesService {
     const results: { query: string; items: NaverLocalItem[] }[] = [];
     let rejectedCount = 0;
 
-    for (const [index, query] of queries.entries()) {
-      try {
-        const items = await this.naverLocalClient.searchLocal({
-          query,
-          display: NAVER_DISPLAY_PER_QUERY,
-          sort: 'comment',
-        });
+    for (let i = 0; i < queries.length; i += NAVER_QUERY_CONCURRENCY) {
+      const batch = queries.slice(i, i + NAVER_QUERY_CONCURRENCY);
+      const batchResults = await Promise.allSettled(
+        batch.map((query) =>
+          this.naverLocalClient
+            .searchLocal({ query, display: NAVER_DISPLAY_PER_QUERY, sort: 'comment' })
+            .then((items) => ({ query, items })),
+        ),
+      );
 
-        results.push({ query, items });
-      } catch (error) {
-        rejectedCount += 1;
+      for (const result of batchResults) {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          rejectedCount += 1;
+        }
       }
 
-      if (index < queries.length - 1) {
+      if (i + NAVER_QUERY_CONCURRENCY < queries.length) {
         await this.delay(NAVER_LOCAL_QUERY_DELAY_MS);
       }
     }
@@ -533,85 +573,71 @@ export class PlacesService {
     base: string,
     dateContext: DateRecommendationContext,
   ): Promise<CandidatePlace[]> {
-    const blogQueries = this.buildDatePrioritySearchQueries(
-      base,
-      'ACTIVITY',
-      dateContext,
-    );
+    const blogQueries = this.buildDatePrioritySearchQueries(base, 'ACTIVITY', dateContext);
     const eventNames = new Map<string, BlogDateEvent>();
 
-    for (const [index, query] of blogQueries.entries()) {
-      const blogItems = await this.safeSearchBlogsForDateEvent(query);
+    // 블로그 쿼리 병렬 배치 실행
+    for (let i = 0; i < blogQueries.length; i += BLOG_QUERY_CONCURRENCY) {
+      const batch = blogQueries.slice(i, i + BLOG_QUERY_CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map((query) =>
+          this.safeSearchBlogsForDateEvent(query).then((items) => ({ query, items })),
+        ),
+      );
 
-      for (const item of blogItems) {
-        const evidenceText = this.toBlogEvidenceText(item);
+      for (const { query, items } of batchResults) {
+        for (const item of items) {
+          const evidenceText = this.toBlogEvidenceText(item);
 
-        if (!this.hasDateEventEvidence(evidenceText, dateContext)) {
-          continue;
-        }
-
-        for (const name of this.extractDateEventNameCandidates(
-          item,
-          station,
-          dateContext,
-        )) {
-          const key = this.normalize(name);
-
-          if (!key || eventNames.has(key)) {
+          if (!this.hasDateEventEvidence(evidenceText, dateContext)) {
             continue;
           }
 
-          eventNames.set(key, {
-            name,
-            blogQuery: query,
-            evidenceText,
-            link: item.link || null,
-          });
+          for (const name of this.extractDateEventNameCandidates(item, station, dateContext)) {
+            const key = this.normalize(name);
 
-          if (eventNames.size >= BLOG_EVENT_NAME_LIMIT) {
-            break;
+            if (!key || eventNames.has(key)) {
+              continue;
+            }
+
+            eventNames.set(key, { name, blogQuery: query, evidenceText, link: item.link || null });
+
+            if (eventNames.size >= BLOG_EVENT_NAME_LIMIT) break;
           }
+
+          if (eventNames.size >= BLOG_EVENT_NAME_LIMIT) break;
         }
 
-        if (eventNames.size >= BLOG_EVENT_NAME_LIMIT) {
-          break;
-        }
+        if (eventNames.size >= BLOG_EVENT_NAME_LIMIT) break;
       }
 
-      if (eventNames.size >= BLOG_EVENT_NAME_LIMIT) {
-        break;
-      }
+      if (eventNames.size >= BLOG_EVENT_NAME_LIMIT) break;
 
-      if (index < blogQueries.length - 1) {
+      if (i + BLOG_QUERY_CONCURRENCY < blogQueries.length) {
         await this.delay(NAVER_LOCAL_QUERY_DELAY_MS);
       }
     }
 
     this.logDateEventExtractedNames([...eventNames.values()]);
 
+    // 이벤트명 로컬 검색을 모두 병렬로 실행
+    const localSearchResults = await Promise.all(
+      [...eventNames.values()].map(async (event) => {
+        const localQueries = this.buildDateEventLocalMatchQueries(event.name, station);
+        const localCandidates = await this.fetchNaverCandidates(
+          localQueries,
+          'ACTIVITY',
+          { skipTypeCompatibility: true },
+        );
+        const nearbyCandidates = this.filterPlacesWithinStationDistance(localCandidates, station);
+        this.logDateEventLocalMatchResults(event.name, localQueries, nearbyCandidates);
+        return { event, nearbyCandidates };
+      }),
+    );
+
     const merged = new Map<string, CandidatePlace>();
 
-    for (const event of eventNames.values()) {
-      const localQueries = this.buildDateEventLocalMatchQueries(
-        event.name,
-        station,
-      );
-      const localCandidates = await this.fetchNaverCandidates(
-        localQueries,
-        'ACTIVITY',
-        { skipTypeCompatibility: true },
-      );
-      const nearbyCandidates = this.filterPlacesWithinStationDistance(
-        localCandidates,
-        station,
-      );
-
-      this.logDateEventLocalMatchResults(
-        event.name,
-        localQueries,
-        nearbyCandidates,
-      );
-
+    for (const { event, nearbyCandidates } of localSearchResults) {
       if (
         nearbyCandidates.length === 0 &&
         this.hasStationLocationEvidence(event.evidenceText, station)
@@ -630,11 +656,7 @@ export class PlacesService {
             candidate.description,
             event.evidenceText,
           ),
-          matchedQueries: [
-            event.blogQuery,
-            ...candidate.matchedQueries,
-            event.name,
-          ],
+          matchedQueries: [event.blogQuery, ...candidate.matchedQueries, event.name],
         };
 
         if (existing) {
@@ -755,13 +777,15 @@ export class PlacesService {
     dateContext: DateRecommendationContext,
   ) {
     const title = this.stripHtml(item.title);
+    const description = this.stripHtml(item.description ?? '');
     const rawParts = [
       ...this.extractDateEventPatternNameCandidates(title),
-      title,
+      ...this.extractDateEventPatternNameCandidates(description),
       ...title.split(/[|:/\-–—!！?？]/),
       ...Array.from(
-        title.matchAll(/\[([^\]]+)]|\(([^)]+)\)|['"‘’“”]([^'"‘’“”]+)['"‘’“”]/g),
+        title.matchAll(/\[([^\]]+)]|\(([^)]+)\)|[‘”’’””]([^’”’’””]+)[‘”’’””]/g),
       ).map((match) => match[1] ?? match[2] ?? match[3] ?? ''),
+      title,
     ];
     const candidates = new Map<string, string>();
 
@@ -787,7 +811,7 @@ export class PlacesService {
     const candidates: string[] = [];
     const normalizedTitle = this.stripHtml(title)
       .replace(/[“”]/g, '"')
-      .replace(/[‘’]/g, "'");
+      .replace(/['']/g, "'");
     const eventPattern =
       /([가-힣A-Za-z0-9&._+'"\s-]{2,45}?(?:팝업스토어|팝업|전시회|전시|기획전|페스티벌|축제))/g;
 
@@ -810,7 +834,7 @@ export class PlacesService {
       .replace(/&quot;/g, '"')
       .replace(/&#39;/g, "'")
       .replace(/[“”]/g, '"')
-      .replace(/[‘’]/g, "'")
+      .replace(/['']/g, "'")
       .replace(/[()[\]{}<>]/g, ' ')
       .replace(new RegExp(`${dateContext.year}년`, 'g'), ' ')
       .replace(
@@ -848,6 +872,9 @@ export class PlacesService {
       );
     }
 
+    // 잘린 제목 처리: "..." 이후는 신뢰할 수 없으므로 제거
+    result = result.replace(/\.{2,}.*$|….*$/, '');
+
     return result.replace(/\s+/g, ' ').trim();
   }
 
@@ -855,6 +882,26 @@ export class PlacesService {
     const normalizedValue = this.normalize(value);
 
     if (normalizedValue.length < 2 || normalizedValue.length > 50) {
+      return false;
+    }
+
+    // 잘린 이름 거부
+    if (value.includes('...') || value.includes('…')) {
+      return false;
+    }
+
+    // 조사/접속사로 시작하는 문장 파편 거부 (예: "에 막 오픈한...", "이 인기인...")
+    if (/^(에|이|가|을|를|의|은|는|에서|으로|도|와|과|한)\s/.test(value)) {
+      return false;
+    }
+
+    // 날짜 표현만으로 된 이름 거부 (예: "6월", "5월")
+    if (/^\d{1,2}월$/.test(value.trim())) {
+      return false;
+    }
+
+    // 날짜 + 이벤트 키워드만 있는 이름 거부 (예: "6월 팝업스토어", "5월 전시")
+    if (/^\d{1,2}월\s*(팝업스토어|팝업|전시회|전시|기획전|페스티벌|축제|이벤트|플리마켓|한정)$/.test(value.trim())) {
       return false;
     }
 
@@ -960,6 +1007,10 @@ export class PlacesService {
         `${base} 조용한 카페`,
         `${base} 브런치 카페`,
         `${base} 베이커리 카페`,
+        `${base} 루프탑 카페`,
+        `${base} 한옥 카페`,
+        `${base} 뷰 좋은 카페`,
+        `${base} 힙한 카페`,
       ];
     }
 
@@ -973,6 +1024,10 @@ export class PlacesService {
         `${base} 전시`,
         `${base} 놀거리`,
         `${base} 체험`,
+        `${base} 갤러리`,
+        `${base} 미술관`,
+        `${base} 공방`,
+        `${base} 독립서점`,
       ];
     }
 
@@ -986,6 +1041,10 @@ export class PlacesService {
         `${base} 데이트 코스 맛집`,
         `${base} 샐러드`,
         `${base} 숨은 맛집`,
+        `${base} 양식 점심`,
+        `${base} 일식 점심`,
+        `${base} 인기 점심 맛집`,
+        `${base} 핫플 점심`,
       ];
     }
 
@@ -999,6 +1058,10 @@ export class PlacesService {
         `${base} 데이트 코스 맛집`,
         `${base} 다이닝`,
         `${base} 숨은 맛집`,
+        `${base} 오마카세`,
+        `${base} 스테이크`,
+        `${base} 코스 요리`,
+        `${base} 분위기 있는 레스토랑`,
       ];
     }
 
@@ -1011,6 +1074,10 @@ export class PlacesService {
       `${base} 데이트 코스 맛집`,
       `${base} 숨은 맛집`,
       `${base} 식당 추천`,
+      `${base} 양식`,
+      `${base} 일식`,
+      `${base} 인기 식당`,
+      `${base} 특별한 식사`,
     ];
   }
 
@@ -1074,9 +1141,12 @@ export class PlacesService {
     dateContext: DateRecommendationContext,
   ) {
     const monthLabel = this.formatKoreanMonthLabel(dateContext);
+    const dateLabel = this.formatKoreanDateLabel(dateContext);
 
     if (type === 'ACTIVITY') {
       return [
+        `${dateLabel} ${base} 팝업`,
+        `${dateLabel} ${base} 이벤트`,
         `${monthLabel} ${base} 팝업`,
         `${monthLabel} ${base} 팝업스토어`,
         `${monthLabel} ${base} 팝업 전시`,
@@ -1085,11 +1155,14 @@ export class PlacesService {
         `${monthLabel} ${base} 축제`,
         `${monthLabel} ${base} 이벤트`,
         `${monthLabel} ${base} 한정 전시`,
+        `${dateLabel} ${base} 오픈`,
+        `${dateLabel} ${base} 한정`,
       ];
     }
 
     if (type === 'CAFE') {
       return [
+        `${dateLabel} ${base} 팝업 카페`,
         `${monthLabel} ${base} 팝업 카페`,
         `${monthLabel} ${base} 기간한정 카페`,
         `${monthLabel} ${base} 신상 카페`,
@@ -1097,6 +1170,7 @@ export class PlacesService {
     }
 
     return [
+      `${dateLabel} ${base} 팝업 맛집`,
       `${monthLabel} ${base} 팝업 맛집`,
       `${monthLabel} ${base} 기간한정 맛집`,
       `${monthLabel} ${base} 신상 맛집`,
@@ -1736,7 +1810,7 @@ export class PlacesService {
     mealTime?: MealTime,
   ) {
     const text = this.normalize(
-      `${place.name} ${place.categoryName} ${place.address ?? ''}`,
+      `${place.name} ${place.categoryName} ${place.description ?? ''} ${place.address ?? ''}`,
     );
     const matchedQueryText = this.normalize(place.matchedQueries.join(' '));
     let score = 0;
@@ -1769,6 +1843,13 @@ export class PlacesService {
     score -= this.scoreByKeywords(text, FRANCHISE_KEYWORDS, 35);
     score -= this.scoreByKeywords(text, LOW_DATE_FIT_KEYWORDS, 45);
     score -= this.scoreBranchLikeName(place.name);
+
+    // 역에서 가까울수록 소폭 가산 (최대 +10, 2km에서 0)
+    if (place.distanceMeters !== null) {
+      score += Math.round(
+        10 * (1 - place.distanceMeters / PLACE_DISTANCE_LIMIT_METERS),
+      );
+    }
 
     return score;
   }
@@ -1817,10 +1898,11 @@ export class PlacesService {
   }
 
   private getDedupKey(place: PlaceResponse) {
-    const normalizedName = this.normalize(place.name);
-    const normalizedAddress = this.normalize(place.address ?? '');
+    if (place.naverPlaceId) {
+      return `naver:${place.naverPlaceId}`;
+    }
 
-    return `${normalizedName}:${normalizedAddress}`;
+    return `${this.normalize(place.name)}:${this.normalize(place.address ?? '')}`;
   }
 
   private createPlaceKey(
