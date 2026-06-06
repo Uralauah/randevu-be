@@ -66,6 +66,7 @@ const RESPONSE_LIMIT_BY_TYPE: Record<PlaceType, number> = {
 };
 
 const NAVER_DISPLAY_PER_QUERY = 5;
+const PLACE_SEARCH_DISPLAY = 5;
 const NAVER_BLOG_DISPLAY_PER_QUERY = 5;
 const PLACE_DISTANCE_LIMIT_METERS = 2_000;
 const EARTH_RADIUS_METERS = 6_371_000;
@@ -147,6 +148,64 @@ export class PlacesService {
       mealTime: type === 'RESTAURANT' ? (mealTime ?? null) : null,
       places,
     };
+  }
+
+  /**
+   * 사용자가 직접 입력한 키워드로 장소를 검색한다.
+   * 네이버 지역 검색 결과를 좌표·링크·placeKey가 채워진 정식 장소로 변환해
+   * 캐시에 적재하므로, 이후 코스 저장·상세 조회에서 동일 placeKey로 재사용된다.
+   * 역 주변 추천(findPlacesByStation)과 달리 거리 제한으로 거르지 않고,
+   * stationId가 주어지면 가까운 순으로 정렬만 한다.
+   */
+  async searchPlacesByKeyword(
+    rawQuery: string,
+    type: PlaceType,
+    stationId?: number,
+  ) {
+    this.validatePlaceType(type);
+
+    const query = (rawQuery ?? '').trim();
+
+    if (query.length === 0) {
+      return { source: 'NAVER' as const, type, query, places: [] };
+    }
+
+    const cacheKey = `search:${type}:${stationId ?? 'none'}:${this.normalize(query)}`;
+    const cached = this.getPlaceListCache(cacheKey);
+
+    if (cached) {
+      return { source: 'NAVER' as const, type, query, places: cached };
+    }
+
+    const items = await this.naverLocalClient.searchLocal({
+      query,
+      display: PLACE_SEARCH_DISPLAY,
+    });
+
+    const seen = new Set<string>();
+    const candidates = items
+      .map((item) => this.toPlaceResponse(item, type))
+      .filter((place) => {
+        const dedupKey = this.getDedupKey(place);
+
+        if (seen.has(dedupKey)) {
+          return false;
+        }
+
+        seen.add(dedupKey);
+
+        return true;
+      });
+
+    const places = await this.sortPlacesByStationDistance(
+      candidates,
+      stationId,
+    );
+
+    await this.cachePlaces(places);
+    this.setPlaceListCache(cacheKey, places);
+
+    return { source: 'NAVER' as const, type, query, places };
   }
 
   async recommendPlaceByStationAndDate(
@@ -1214,6 +1273,50 @@ export class PlacesService {
 
   private toSearchStationName(stationName: string) {
     return stationName.endsWith('역') ? stationName : `${stationName}역`;
+  }
+
+  /**
+   * 거리 제한 없이 distanceMeters만 채우고 가까운 순으로 정렬한다.
+   * 좌표가 없는 장소(직접 입력 등)는 거리 null로 뒤쪽에 배치한다.
+   */
+  private async sortPlacesByStationDistance(
+    places: PlaceResponse[],
+    stationId?: number,
+  ): Promise<PlaceResponse[]> {
+    if (!stationId) {
+      return places;
+    }
+
+    const station = await this.stationRepository.findOne({
+      where: { id: stationId },
+    });
+    const stationCoordinates = station
+      ? this.toValidCoordinates(station)
+      : null;
+
+    if (!stationCoordinates) {
+      return places;
+    }
+
+    return places
+      .map((place) => {
+        const placeCoordinates = this.toValidCoordinates(place);
+        const distanceMeters = placeCoordinates
+          ? Math.round(
+              this.calculateStraightLineDistanceMeters(
+                stationCoordinates,
+                placeCoordinates,
+              ),
+            )
+          : null;
+
+        return { ...place, distanceMeters };
+      })
+      .sort(
+        (a, b) =>
+          (a.distanceMeters ?? Number.POSITIVE_INFINITY) -
+          (b.distanceMeters ?? Number.POSITIVE_INFINITY),
+      );
   }
 
   private toPlaceResponse(

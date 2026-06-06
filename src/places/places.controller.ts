@@ -34,6 +34,19 @@ export class PlacesController {
     );
   }
 
+  @Get('places/search')
+  searchPlaces(
+    @Query('query') query: string,
+    @Query('type') type: PlaceType,
+    @Query('stationId') stationId?: string,
+  ) {
+    return this.placesService.searchPlacesByKeyword(
+      query,
+      type,
+      stationId ? Number(stationId) : undefined,
+    );
+  }
+
   @Get('places/:placeKey')
   findPlaceDetail(@Param('placeKey') placeKey: string) {
     return this.placesService.findPlaceDetail(placeKey);
