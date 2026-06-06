@@ -95,7 +95,7 @@ export class DateCoursesService {
       where: { userId },
       relations: {
         course: {
-          station: true,
+          station: { stationLines: { line: true } },
           items: true,
           participants: {
             user: {
@@ -456,7 +456,7 @@ export class DateCoursesService {
     const course = await this.courseRepository.findOne({
       where: { id: courseId },
       relations: {
-        station: true,
+        station: { stationLines: { line: true } },
         items: true,
         participants: {
           user: {
@@ -496,6 +496,13 @@ export class DateCoursesService {
             lat: course.station.lat,
             lng: course.station.lng,
             vibeText: course.station.vibeText,
+            lines: (course.station.stationLines ?? [])
+              .sort((a, b) => a.line.id - b.line.id)
+              .map((sl) => ({
+                id: sl.line.id,
+                name: sl.line.name,
+                color: sl.line.color ?? '#888888',
+              })),
           }
         : null,
       items: sortedItems.map((item) => ({
