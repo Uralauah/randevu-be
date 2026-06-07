@@ -111,6 +111,7 @@ export class PlacesService {
     type: PlaceType,
     mealTime?: MealTime,
     excludedPlaceKeys?: string,
+    category?: string,
   ) {
     this.validatePlaceType(type);
     this.validateMealTime(type, mealTime);
@@ -130,11 +131,12 @@ export class PlacesService {
       this.parseCommaSeparated(excludedPlaceKeys),
     );
 
-    const cacheKey = `${stationId}:${type}:${mealTime ?? 'none'}`;
+    const normalizedCategory = this.normalizeCategory(type, category);
+    const cacheKey = `${stationId}:${type}:${mealTime ?? 'none'}:${normalizedCategory ?? 'all'}`;
     let allPlaces = this.getPlaceListCache(cacheKey);
 
     if (!allPlaces) {
-      allPlaces = await this.searchPlaces(station, type, mealTime);
+      allPlaces = await this.searchPlaces(station, type, mealTime, normalizedCategory);
       this.setPlaceListCache(cacheKey, allPlaces);
     }
 
@@ -573,14 +575,18 @@ export class PlacesService {
     station: SubwayStation,
     type: PlaceType,
     mealTime?: MealTime,
+    category?: string,
   ): Promise<PlaceResponse[]> {
-    const queries = this.buildSearchQueries(station, type, mealTime);
+    const queries = category
+      ? this.buildCategorySearchQueries(station, type, mealTime, category)
+      : this.buildSearchQueries(station, type, mealTime);
+
     const candidates = await this.fetchNaverCandidates(queries, type);
     const nearbyCandidates = this.filterPlacesWithinStationDistance(
       candidates,
       station,
     );
-    const rankedPlaces = this.rankPlaces(nearbyCandidates, type, mealTime);
+    const rankedPlaces = this.rankPlaces(nearbyCandidates, type, mealTime, category);
 
     const qualifiedPlaces = rankedPlaces.filter(
       (place) => (place.recommendationScore ?? 0) > 0,
@@ -1830,11 +1836,12 @@ export class PlacesService {
     places: CandidatePlace[],
     type: PlaceType,
     mealTime?: MealTime,
+    category?: string,
   ): PlaceResponse[] {
     return places
       .map((place) => ({
         ...place,
-        recommendationScore: this.scorePlace(place, type, mealTime),
+        recommendationScore: this.scorePlace(place, type, mealTime, category),
       }))
       .sort((a, b) => {
         const scoreDiff =
@@ -1947,6 +1954,7 @@ export class PlacesService {
     place: CandidatePlace,
     type: PlaceType,
     mealTime?: MealTime,
+    category?: string,
   ) {
     const text = this.normalize(
       `${place.name} ${place.categoryName} ${place.description ?? ''} ${place.address ?? ''}`,
@@ -2000,7 +2008,80 @@ export class PlacesService {
     if (place.tags?.includes('데이트')) score += 15;
     if (place.tags?.includes('화려한')) score += 10;
 
+    // 카테고리 매칭 보너스: 키워드 적중당 +45 (데이트 핵심 신호 수준)
+    if (category) {
+      score += this.scorePlaceByCategory(place, type, category);
+    }
+
     return score;
+  }
+
+  private scorePlaceByCategory(
+    place: CandidatePlace,
+    type: PlaceType,
+    category: string,
+  ): number {
+    const config = PLACE_CATEGORY_CONFIG[type]?.[category];
+    if (!config) return 0;
+    const text = this.normalize(
+      `${place.name} ${place.categoryName} ${place.description ?? ''}`,
+    );
+    return this.scoreByKeywords(text, config.keywords, 45);
+  }
+
+  private buildCategorySearchQueries(
+    station: SubwayStation,
+    type: PlaceType,
+    mealTime: MealTime | undefined,
+    category: string,
+  ): string[] {
+    const config = PLACE_CATEGORY_CONFIG[type]?.[category];
+    if (!config) {
+      return this.buildSearchQueries(station, type, mealTime);
+    }
+
+    const base = this.toSearchLocationName(station);
+
+    // 카테고리 전용 쿼리 (역명을 앞에 붙임)
+    const categoryQueries = config.queries.map((q) => `${base} ${q}`);
+
+    // 분위기/데이트 보완 쿼리: 카테고리 특성 + 데이트 맥락 유지
+    const supplementQueries = this.buildCategorySupplementQueries(base, type, mealTime, category);
+
+    return [...categoryQueries, ...supplementQueries];
+  }
+
+  private buildCategorySupplementQueries(
+    base: string,
+    type: PlaceType,
+    mealTime: MealTime | undefined,
+    category: string,
+  ): string[] {
+    if (type === 'RESTAURANT') {
+      const timeLabel = mealTime === 'DINNER' ? '저녁' : mealTime === 'LUNCH' ? '점심' : '';
+      return [
+        `${base} ${category} 데이트 맛집`,
+        `${base} ${category} 분위기 좋은${timeLabel ? ' ' + timeLabel : ''}`,
+      ];
+    }
+    if (type === 'CAFE') {
+      return [
+        `${base} ${category} 추천`,
+        `${base} 데이트 카페 ${category}`,
+      ];
+    }
+    return [
+      `${base} ${category} 데이트`,
+      `${base} ${category} 추천`,
+    ];
+  }
+
+  private normalizeCategory(type: PlaceType, category?: string): string | undefined {
+    if (!category) return undefined;
+    const config = PLACE_CATEGORY_CONFIG[type];
+    if (!config) return undefined;
+    // 전달된 카테고리가 해당 타입에 유효한지 검증 후 반환
+    return Object.keys(config).includes(category) ? category : undefined;
   }
 
   private scoreRestaurantByMealTime(text: string, mealTime?: MealTime) {
@@ -2544,3 +2625,97 @@ const BRANCH_LIKE_KEYWORDS = [
   '터미널점',
   '플라자점',
 ];
+
+// ── 카테고리별 검색 쿼리 & 키워드 ───────────────────────────────────────────────
+
+interface PlaceCategoryConfig {
+  queries: string[];
+  keywords: string[];
+}
+
+const RESTAURANT_CATEGORY_CONFIG: Record<string, PlaceCategoryConfig> = {
+  '한식': {
+    queries: ['한식 맛집', '국밥', '갈비 맛집', '삼겹살 맛집', '한정식', '백반 맛집'],
+    keywords: ['한식', '국밥', '갈비', '삼겹살', '불고기', '된장', '한정식', '백반', '비빔밥', '김치찌개', '순두부'],
+  },
+  '일식': {
+    queries: ['라멘 맛집', '초밥 맛집', '이자카야 추천', '돈카츠', '오마카세', '사시미'],
+    keywords: ['일식', '라멘', '초밥', '스시', '이자카야', '돈카츠', '돈가스', '사시미', '오마카세', '롤', '우동', '소바'],
+  },
+  '양식': {
+    queries: ['파스타 맛집', '스테이크 맛집', '브런치 레스토랑', '피자 맛집', '다이닝'],
+    keywords: ['양식', '파스타', '스테이크', '피자', '브런치', '샐러드', '이탈리안', '프렌치', '다이닝', '비스트로'],
+  },
+  '중식': {
+    queries: ['마라탕 맛집', '딤섬 맛집', '중식 맛집', '탕수육', '마라샹궈'],
+    keywords: ['중식', '마라', '딤섬', '짜장', '짬뽕', '탕수육', '중화요리', '마라탕', '마라샹궈'],
+  },
+  '아시안': {
+    queries: ['태국음식 맛집', '베트남 맛집', '쌀국수', '팟타이', '멕시칸'],
+    keywords: ['태국', '베트남', '쌀국수', '팟타이', '아시안', '멕시칸', '타코', '부리또'],
+  },
+  '술집·바': {
+    queries: ['와인바 추천', '칵테일바', '이자카야 데이트', '루프탑 바'],
+    keywords: ['와인', '와인바', '칵테일', '이자카야', '바', '펍', '요리주점', '루프탑바'],
+  },
+  '면·덮밥': {
+    queries: ['라멘 맛집', '우동 맛집', '덮밥 맛집', '국수 맛집', '돈부리'],
+    keywords: ['라멘', '우동', '소바', '국수', '덮밥', '돈부리', '오야코동', '규동', '면', '칼국수', '냉면'],
+  },
+};
+
+const CAFE_CATEGORY_CONFIG: Record<string, PlaceCategoryConfig> = {
+  '감성카페': {
+    queries: ['감성카페', '힙한 카페', '인스타 카페', 'SNS 핫플 카페'],
+    keywords: ['감성', '힙한', '인스타', '포토존', '인테리어', '분위기좋은카페', '힙카페'],
+  },
+  '디저트': {
+    queries: ['디저트 카페', '케이크 카페', '타르트 카페', '마카롱 카페'],
+    keywords: ['디저트', '케이크', '타르트', '마카롱', '에클레어', '푸딩', '크림'],
+  },
+  '베이커리': {
+    queries: ['베이커리 카페', '소금빵 카페', '크로와상 카페'],
+    keywords: ['베이커리', '빵', '소금빵', '크로와상', '스콘', '식빵', '크루아상'],
+  },
+  '브런치': {
+    queries: ['브런치 카페', '에그베네딕트', '팬케이크 카페'],
+    keywords: ['브런치', '에그베네딕트', '팬케이크', '와플', '에그', '브런치카페'],
+  },
+  '뷰카페': {
+    queries: ['루프탑 카페', '뷰 좋은 카페', '리버뷰 카페', '한강뷰 카페'],
+    keywords: ['루프탑', '뷰', '리버뷰', '한강', '테라스', '야외', '전망'],
+  },
+  '한옥카페': {
+    queries: ['한옥 카페', '전통 카페', '고즈넉한 카페'],
+    keywords: ['한옥', '전통', '고즈넉', '기와', '한옥카페'],
+  },
+};
+
+const ACTIVITY_CATEGORY_CONFIG: Record<string, PlaceCategoryConfig> = {
+  '팝업·전시': {
+    queries: ['팝업스토어', '전시 데이트', '갤러리', '미술관 데이트'],
+    keywords: ['팝업', '전시', '갤러리', '미술관', '기간한정', '팝업스토어'],
+  },
+  '공방·체험': {
+    queries: ['공방 데이트', '도예 체험', '캔들 공방', '향수 만들기', '플라워'],
+    keywords: ['공방', '도예', '캔들', '향수', '체험', '클래스', '플라워', '원데이'],
+  },
+  '편집샵': {
+    queries: ['편집샵', '소품샵', '빈티지샵', '인테리어샵'],
+    keywords: ['편집샵', '소품', '빈티지', '인테리어', '셀렉', '편집'],
+  },
+  '독립서점': {
+    queries: ['독립서점', '동네서점', '북카페'],
+    keywords: ['서점', '독립서점', '책방', '북카페', '책'],
+  },
+  '공원·산책': {
+    queries: ['공원 데이트', '산책로', '한강공원', '나들이'],
+    keywords: ['공원', '산책', '한강', '숲길', '피크닉', '나들이'],
+  },
+};
+
+const PLACE_CATEGORY_CONFIG: Partial<Record<PlaceType, Record<string, PlaceCategoryConfig>>> = {
+  RESTAURANT: RESTAURANT_CATEGORY_CONFIG,
+  CAFE: CAFE_CATEGORY_CONFIG,
+  ACTIVITY: ACTIVITY_CATEGORY_CONFIG,
+};

@@ -12,12 +12,14 @@ export class PlacesController {
     @Query('type') type: PlaceType,
     @Query('mealTime') mealTime?: MealTime,
     @Query('excludedPlaceKeys') excludedPlaceKeys?: string,
+    @Query('category') category?: string,
   ) {
     return this.placesService.findPlacesByStation(
       stationId,
       type,
       mealTime,
       excludedPlaceKeys,
+      category,
     );
   }
 
