@@ -1126,6 +1126,8 @@ export class PlacesService {
         `${base} 한옥 카페`,
         `${base} 뷰 좋은 카페`,
         `${base} 힙한 카페`,
+        `${base} 인스타 카페`,
+        `${base} SNS 핫플 카페`,
       ];
     }
 
@@ -1143,6 +1145,8 @@ export class PlacesService {
         `${base} 미술관`,
         `${base} 공방`,
         `${base} 독립서점`,
+        `${base} 인스타 핫플`,
+        `${base} SNS 핫플`,
       ];
     }
 
@@ -1160,6 +1164,8 @@ export class PlacesService {
         `${base} 일식 점심`,
         `${base} 인기 점심 맛집`,
         `${base} 핫플 점심`,
+        `${base} 인스타 점심 맛집`,
+        `${base} 요즘 핫한 점심`,
       ];
     }
 
@@ -1177,6 +1183,8 @@ export class PlacesService {
         `${base} 스테이크`,
         `${base} 코스 요리`,
         `${base} 분위기 있는 레스토랑`,
+        `${base} 인스타 저녁 맛집`,
+        `${base} 요즘 핫한 식당`,
       ];
     }
 
@@ -1193,6 +1201,8 @@ export class PlacesService {
       `${base} 일식`,
       `${base} 인기 식당`,
       `${base} 특별한 식사`,
+      `${base} 인스타 맛집`,
+      `${base} SNS 맛집`,
     ];
   }
 
@@ -1980,6 +1990,16 @@ export class PlacesService {
       );
     }
 
+    // SNS 인기 신호: 인스타/예약 링크 보유 = MZ픽·핫플 지표
+    if (place.instagramLink) score += 15;
+    if (place.reservationLink) score += 10;
+
+    // 캐시된 블로그 태그 보너스 (한 번이라도 detail 조회된 장소에 적용)
+    if (place.tags?.includes('인스타 감성')) score += 20;
+    if (place.tags?.includes('분위기 좋은')) score += 20;
+    if (place.tags?.includes('데이트')) score += 15;
+    if (place.tags?.includes('화려한')) score += 10;
+
     return score;
   }
 
@@ -2192,6 +2212,10 @@ const INTENT_KEYWORDS = [
   '추천',
   '가볼만한',
   '맛집',
+  '인스타',
+  'sns',
+  '힙한',
+  '요즘',
 ];
 
 const DATE_LIMITED_EVENT_KEYWORDS = [
@@ -2247,6 +2271,8 @@ const POPULAR_PLACE_KEYWORDS = [
   '추천',
   '웨이팅',
   '예약',
+  '인스타',
+  'sns',
 ];
 
 const ACTIVITY_EXCLUDED_CATEGORY_KEYWORDS = [
@@ -2303,6 +2329,8 @@ const MOOD_KEYWORDS = [
   '리버뷰',
   '뷰',
   '공간',
+  '힙한',
+  '인스타',
 ];
 
 const MODERATE_DATE_KEYWORDS = [
