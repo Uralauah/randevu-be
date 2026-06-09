@@ -8,7 +8,7 @@ import {
   Index,
   Unique,
 } from 'typeorm';
-import { User } from './user.entity';
+import { User } from '../../users/entities/user.entity';
 
 @Entity('social_accounts')
 @Unique('uq_provider_account', ['provider', 'providerId'])

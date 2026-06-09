@@ -7,8 +7,9 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
 import { In, Repository } from 'typeorm';
-import { User } from '../auth/entities';
-import { SubwayStation } from '../stations/entities';
+import { User } from '../users/entities';
+import { UsersService } from '../users/users.service';
+import { StationsService } from '../stations/stations.service';
 import { DateCourse, DateCourseItem, DateCourseParticipant } from './entities';
 import {
   CalculateDateCourseWalkingSegmentsDto,
@@ -51,12 +52,8 @@ export class DateCoursesService {
     @InjectRepository(DateCourseParticipant)
     private readonly participantRepository: Repository<DateCourseParticipant>,
 
-    @InjectRepository(User)
-    private readonly userRepository: Repository<User>,
-
-    @InjectRepository(SubwayStation)
-    private readonly stationRepository: Repository<SubwayStation>,
-
+    private readonly usersService: UsersService,
+    private readonly stationsService: StationsService,
     private readonly dateCoursesGateway: DateCoursesGateway,
   ) {}
 
@@ -423,9 +420,7 @@ export class DateCoursesService {
   }
 
   private async assertUserExists(userId: string) {
-    const exists = await this.userRepository.exists({
-      where: { id: userId },
-    });
+    const exists = await this.usersService.userExists(userId);
 
     if (!exists) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');
@@ -433,9 +428,7 @@ export class DateCoursesService {
   }
 
   private async assertStationExists(stationId: number) {
-    const exists = await this.stationRepository.exists({
-      where: { id: stationId },
-    });
+    const exists = await this.stationsService.stationExists(stationId);
 
     if (!exists) {
       throw new NotFoundException('역을 찾을 수 없습니다.');
@@ -630,12 +623,7 @@ export class DateCoursesService {
   }
 
   private async findUserProfileOrThrow(userId: string) {
-    const user = await this.userRepository.findOne({
-      where: { id: userId },
-      relations: {
-        socialAccounts: true,
-      },
-    });
+    const user = await this.usersService.findUserWithProfile(userId);
 
     if (!user) {
       throw new NotFoundException('사용자를 찾을 수 없습니다.');

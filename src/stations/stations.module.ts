@@ -22,5 +22,6 @@ import {
   ],
   controllers: [StationsController],
   providers: [StationsService],
+  exports: [StationsService],
 })
 export class StationsModule {}

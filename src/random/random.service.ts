@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { CreateRandomSubwayDto } from './dto/create-random-subway.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { RandomResult } from './entities';
 import { Repository } from 'typeorm';
 import { TravelTimeCache } from '../stations/entities';
 
@@ -17,9 +16,6 @@ export class RandomService {
   private readonly logger = new Logger(RandomService.name);
 
   constructor(
-    @InjectRepository(RandomResult)
-    private readonly randomResultRepository: Repository<RandomResult>,
-
     @InjectRepository(TravelTimeCache)
     private readonly travelTimeCacheRepository: Repository<TravelTimeCache>,
   ) {}

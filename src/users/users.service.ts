@@ -5,8 +5,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { User } from '../auth/entities';
-import { Region, SubwayStation } from '../stations/entities';
+import { User } from './entities';
+import { StationsService } from '../stations/stations.service';
 import { UpdateMeDto } from './dto/update-me.dto';
 
 @Injectable()
@@ -15,12 +15,19 @@ export class UsersService {
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
 
-    @InjectRepository(Region)
-    private readonly regionRepository: Repository<Region>,
-
-    @InjectRepository(SubwayStation)
-    private readonly stationRepository: Repository<SubwayStation>,
+    private readonly stationsService: StationsService,
   ) {}
+
+  async userExists(userId: string): Promise<boolean> {
+    return this.userRepository.exists({ where: { id: userId } });
+  }
+
+  async findUserWithProfile(userId: string): Promise<User | null> {
+    return this.userRepository.findOne({
+      where: { id: userId },
+      relations: { socialAccounts: true },
+    });
+  }
 
   async updateMe(userId: string, dto: UpdateMeDto) {
     const user = await this.userRepository.findOne({ where: { id: userId } });
@@ -69,26 +76,24 @@ export class UsersService {
     regionCode: string | null,
     stationId: number | null,
   ) {
-    const region = regionCode
-      ? await this.regionRepository.findOne({
-          where: { code: regionCode.toUpperCase() },
-        })
-      : null;
+    let regionId: number | null = null;
 
-    if (regionCode && !region) {
-      throw new BadRequestException('유효하지 않은 기본 지역입니다.');
+    if (regionCode) {
+      const region = await this.stationsService.findRegionByCode(regionCode);
+      if (!region) {
+        throw new BadRequestException('유효하지 않은 기본 지역입니다.');
+      }
+      regionId = region.id;
     }
 
-    const station = stationId
-      ? await this.stationRepository.findOne({ where: { id: stationId } })
-      : null;
-
-    if (stationId && !station) {
-      throw new BadRequestException('유효하지 않은 기본 역입니다.');
-    }
-
-    if (region && station && station.regionId !== region.id) {
-      throw new BadRequestException('기본 역이 기본 지역에 속하지 않습니다.');
+    if (stationId) {
+      const station = await this.stationsService.findStationById(stationId);
+      if (!station) {
+        throw new BadRequestException('유효하지 않은 기본 역입니다.');
+      }
+      if (regionId !== null && station.regionId !== regionId) {
+        throw new BadRequestException('기본 역이 기본 지역에 속하지 않습니다.');
+      }
     }
   }
 

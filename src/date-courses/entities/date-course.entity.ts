@@ -9,7 +9,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { User } from '../../auth/entities/user.entity';
+import { User } from '../../users/entities/user.entity';
 import { SubwayStation } from '../../stations/entities';
 import { DateCourseItem } from './date-course-item.entity';
 import { DateCourseParticipant } from './date-course-participant.entity';

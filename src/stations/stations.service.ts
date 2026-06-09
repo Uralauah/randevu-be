@@ -96,6 +96,20 @@ export class StationsService {
     }));
   }
 
+  async stationExists(stationId: number): Promise<boolean> {
+    return this.stationRepository.exists({ where: { id: stationId } });
+  }
+
+  async findRegionByCode(regionCode: string): Promise<Region | null> {
+    return this.regionRepository.findOne({
+      where: { code: regionCode.toUpperCase() },
+    });
+  }
+
+  async findStationById(stationId: number): Promise<SubwayStation | null> {
+    return this.stationRepository.findOne({ where: { id: stationId } });
+  }
+
   async rebuildTravelTimeCache(regionCode?: string) {
     const normalizedRegionCode = regionCode?.toUpperCase();
     const where: FindOptionsWhere<SubwayStation> | undefined =

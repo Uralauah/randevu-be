@@ -6,10 +6,7 @@ import {
   UpdateDateColumn,
   OneToMany,
 } from 'typeorm';
-import { SocialAccount } from './social-account.entity';
-import { RandomResult } from '../../random/entities/random-result.entity';
-import { SavedResult } from '../../saved/entities/saved-result.entity';
-import { ExcludedStationPreset } from '../../saved/entities/excluded-station-preset.entity';
+import { SocialAccount } from '../../auth/entities/social-account.entity';
 
 @Entity('users')
 export class User {
@@ -41,13 +38,4 @@ export class User {
 
   @OneToMany(() => SocialAccount, (sa) => sa.user, { cascade: true })
   socialAccounts!: SocialAccount[];
-
-  @OneToMany(() => RandomResult, (r) => r.user)
-  randomResults!: RandomResult[];
-
-  @OneToMany(() => SavedResult, (s) => s.user)
-  savedResults!: SavedResult[];
-
-  @OneToMany(() => ExcludedStationPreset, (p) => p.user)
-  excludedStationPresets!: ExcludedStationPreset[];
 }

@@ -1,6 +1,8 @@
 import { Repository } from 'typeorm';
-import { SocialAccount, User } from '../auth/entities';
-import { SubwayStation } from '../stations/entities';
+import { SocialAccount } from '../auth/entities';
+import { User } from '../users/entities';
+import { UsersService } from '../users/users.service';
+import { StationsService } from '../stations/stations.service';
 import { DateCoursesGateway } from './date-courses.gateway';
 import { DateCoursesService } from './date-courses.service';
 import { DateCourse, DateCourseItem, DateCourseParticipant } from './entities';
@@ -10,8 +12,8 @@ describe('DateCoursesService', () => {
   let courseRepository: MockRepository<DateCourse>;
   let itemRepository: MockRepository<DateCourseItem>;
   let participantRepository: MockRepository<DateCourseParticipant>;
-  let userRepository: MockRepository<User>;
-  let stationRepository: MockRepository<SubwayStation>;
+  let usersService: jest.Mocked<Pick<UsersService, 'userExists' | 'findUserWithProfile'>>;
+  let stationsService: jest.Mocked<Pick<StationsService, 'stationExists'>>;
   let dateCoursesGateway: Pick<
     DateCoursesGateway,
     'emitParticipantJoined' | 'emitCourseUpdated'
@@ -21,8 +23,13 @@ describe('DateCoursesService', () => {
     courseRepository = mockRepository<DateCourse>();
     itemRepository = mockRepository<DateCourseItem>();
     participantRepository = mockRepository<DateCourseParticipant>();
-    userRepository = mockRepository<User>();
-    stationRepository = mockRepository<SubwayStation>();
+    usersService = {
+      userExists: jest.fn().mockResolvedValue(true),
+      findUserWithProfile: jest.fn(),
+    };
+    stationsService = {
+      stationExists: jest.fn().mockResolvedValue(true),
+    };
     dateCoursesGateway = {
       emitParticipantJoined: jest.fn(),
       emitCourseUpdated: jest.fn(),
@@ -32,16 +39,16 @@ describe('DateCoursesService', () => {
       courseRepository,
       itemRepository,
       participantRepository,
-      userRepository,
-      stationRepository,
+      usersService as unknown as UsersService,
+      stationsService as unknown as StationsService,
       dateCoursesGateway as DateCoursesGateway,
     );
   });
 
   describe('create', () => {
     it('rejects duplicate places in a course', async () => {
-      userRepository.exists.mockResolvedValue(true);
-      stationRepository.exists.mockResolvedValue(true);
+      usersService.userExists.mockResolvedValue(true);
+      stationsService.stationExists.mockResolvedValue(true);
 
       await expect(
         service.create('user-id', {
@@ -335,7 +342,7 @@ describe('DateCoursesService', () => {
         platform: 'KAKAO',
       });
 
-      userRepository.findOne.mockResolvedValueOnce(joiningUser);
+      usersService.findUserWithProfile.mockResolvedValueOnce(joiningUser);
       courseRepository.findOne
         .mockResolvedValueOnce(course)
         .mockResolvedValueOnce({
