@@ -4,6 +4,8 @@ import { StationsController } from './stations.controller';
 import { StationsService } from './stations.service';
 import {
   Region,
+  SubwayLine,
+  StationLine,
   SubwayStation,
   SubwayEdge,
   SubwayTransfer,
@@ -14,6 +16,8 @@ import {
   imports: [
     TypeOrmModule.forFeature([
       Region,
+      SubwayLine,
+      StationLine,
       SubwayStation,
       SubwayEdge,
       SubwayTransfer,
