@@ -57,6 +57,8 @@ export class PlaceSearchService {
     const results: { query: string; items: NaverLocalItem[] }[] = [];
     let rejectedCount = 0;
 
+    // 배치 단위로 요청하고 배치 사이에 짧은 간격을 둬 네이버 429(rate limit) 버스트를
+    // 완화한다. 전역 NaverRateLimiter와 함께 burst를 평탄화한다.
     for (let i = 0; i < queries.length; i += NAVER_QUERY_CONCURRENCY) {
       const batch = queries.slice(i, i + NAVER_QUERY_CONCURRENCY);
       const batchResults = await Promise.allSettled(

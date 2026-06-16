@@ -217,7 +217,7 @@ export class PlacesService {
           )
       : candidates;
 
-    await this.cachePlaces(places);
+    this.cachePlacesInBackground(places);
     this.setPlaceListCache(cacheKey, places);
 
     return { source: 'NAVER' as const, type, query, places };
@@ -296,7 +296,7 @@ export class PlacesService {
       throw new NotFoundException('추천할 장소를 찾을 수 없습니다.');
     }
 
-    await this.cachePlaces([recommendation]);
+    this.cachePlacesInBackground([recommendation]);
 
     return {
       station: {
@@ -658,7 +658,7 @@ export class PlacesService {
 
     const selectedPlaces = finalPlaces.slice(0, RESPONSE_LIMIT_BY_TYPE[type]);
 
-    await this.cachePlaces(selectedPlaces);
+    this.cachePlacesInBackground(selectedPlaces);
 
     return selectedPlaces;
   }
@@ -675,6 +675,20 @@ export class PlacesService {
     const refreshedPlace = await this.refreshPlaceTagsIfNeeded(place);
 
     return this.toPlaceDetailResponse(refreshedPlace);
+  }
+
+  /**
+   * 장소 영속 캐시 저장은 응답 경로의 임계 지연에 포함될 필요가 없다.
+   * (상세 조회 시점에 사용되는 보조 데이터) 백그라운드로 수행해 응답을 먼저 반환한다.
+   */
+  private cachePlacesInBackground(places: PlaceResponse[]): void {
+    void this.cachePlaces(places).catch((error) =>
+      this.logger.warn(
+        `장소 캐시 저장 실패: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
   }
 
   private async cachePlaces(places: PlaceResponse[]) {
