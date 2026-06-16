@@ -7,6 +7,9 @@ import { NaverBlogClient } from './naver-blog.client';
 import { KakaoLocalClient } from './kakao-local.client';
 import { NaverLocalClient, NaverLocalItem } from './naver-local.client';
 import { PlaceTagService } from './place-tag.service';
+import { PlaceScoringService } from './place-scoring.service';
+import { PlaceSearchService } from './place-search.service';
+import { BlogDateEventService } from './blog-date-event.service';
 import { PlacesService } from './places.service';
 
 describe('PlacesService', () => {
@@ -40,6 +43,9 @@ describe('PlacesService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PlacesService,
+        PlaceScoringService,
+        PlaceSearchService,
+        BlogDateEventService,
         {
           provide: getRepositoryToken(SubwayStation),
           useValue: stationRepository,
@@ -115,7 +121,7 @@ describe('PlacesService', () => {
     expect(result.date).toBe('2026-07-18');
     expect(typeof result.recommendation.category).toBe('string');
     expect(result.recommendation.name).toBe('코엑스아쿠아리움');
-    expect(result.recommendation.reason).toContain('좋아요');
+    expect(result.recommendation.reason).toContain('실내 데이트로 좋은 장소');
 
     const firstSearchParams = naverLocalClient.searchLocal.mock.calls[0]?.[0];
 
@@ -165,7 +171,9 @@ describe('PlacesService', () => {
     );
 
     expect(result.recommendation.name).toBe('7월 18일 한정 팝업스토어');
-    expect(result.recommendation.reason).toContain('팝업이나 기간한정 이벤트');
+    expect(result.recommendation.reason).toContain(
+      '7월 18일 하루만 운영하는 인기 팝업 이벤트',
+    );
     expect(naverLocalClient.searchLocal).toHaveBeenCalledWith(
       expect.objectContaining({
         query: '2026년 7월 서울 삼성 팝업스토어',
@@ -181,9 +189,12 @@ describe('PlacesService', () => {
         query: expect.stringContaining('데이트 코스'),
       }),
     );
+    // 추천 검색은 월(2026년 7월) 또는 날짜(7월 18일) 라벨이 붙은 쿼리만 사용한다.
     expect(
-      naverLocalClient.searchLocal.mock.calls.every(([params]) =>
-        params.query.includes('2026년 7월'),
+      naverLocalClient.searchLocal.mock.calls.every(
+        ([params]) =>
+          params.query.includes('2026년 7월') ||
+          params.query.includes('7월 18일'),
       ),
     ).toBe(true);
   });
@@ -198,16 +209,6 @@ describe('PlacesService', () => {
         name: '서울',
       },
     });
-    dateCourseItemRepository.find.mockResolvedValue([
-      {
-        courseId: 'course-id',
-        placeKey: 'naver:100',
-        name: '이미 담긴 팝업',
-        address: '서울 성동구 테스트로 100',
-        lat: 37.5447,
-        lng: 127.0559,
-      },
-    ]);
     naverLocalClient.searchLocal.mockImplementation(async ({ query }) => {
       if (!query.includes('팝업')) {
         return [];
@@ -233,17 +234,13 @@ describe('PlacesService', () => {
       ];
     });
 
+    // 코스에 이미 담긴 장소는 placeKey 목록으로 전달돼 추천에서 제외된다.
     const result = await service.recommendPlaceByStationAndDate(
       12,
       '2026-06-05',
-      'course-id',
+      'naver:100',
     );
 
-    expect(dateCourseItemRepository.find).toHaveBeenCalledWith({
-      where: {
-        courseId: 'course-id',
-      },
-    });
     expect(result.recommendation.name).toBe('새로운 팝업');
   });
 
@@ -296,7 +293,7 @@ describe('PlacesService', () => {
     );
 
     expect(result.recommendation.name).toBe('아이모 20주년 기념 팝업 전시회');
-    expect(result.recommendation.reason).toContain('팝업이나 기간한정 이벤트');
+    expect(result.recommendation.reason).toContain('아이모 20주년');
     expect(naverBlogClient.searchBlogs).toHaveBeenCalledWith(
       expect.objectContaining({
         query: '2026년 5월 서울 성수 팝업스토어',
@@ -321,7 +318,7 @@ describe('PlacesService', () => {
       },
     });
     naverBlogClient.searchBlogs.mockImplementation(async ({ query }) => {
-      if (query === '2026년 6월 서울 성수 팝업') {
+      if (query === '2026년 6월 서울 성수 팝업스토어') {
         return [
           {
             title: '6월 성수 닥터지 팝업 본품 증정 이벤트 후기',
@@ -373,10 +370,11 @@ describe('PlacesService', () => {
       },
     });
     naverBlogClient.searchBlogs.mockImplementation(async ({ query }) => {
-      if (query === '2026년 6월 서울 성수 팝업') {
+      if (query === '2026년 6월 서울 성수 팝업스토어') {
         return [
           {
-            title: '뿔바투 팝업 그냥 못 지나침 예약방법 디저트 라인업 굿즈 총정리',
+            title:
+              '뿔바투 팝업 그냥 못 지나침 예약방법 디저트 라인업 굿즈 총정리',
             link: 'https://blog.naver.com/test/3',
             description:
               '2026년 6월 5일 성수역 3번 출구 앞에서 만난 기간한정 팝업 이벤트',
@@ -402,7 +400,7 @@ describe('PlacesService', () => {
     expect(result.recommendation.externalLink).toBe(
       'https://blog.naver.com/test/3',
     );
-    expect(result.recommendation.reason).toContain('팝업이나 기간한정 이벤트');
+    expect(result.recommendation.reason).toContain('뿔바투 팝업');
   });
 
   it('prioritizes activity places over ordinary cafes and restaurants for date recommendations', async () => {
@@ -560,7 +558,7 @@ describe('PlacesService', () => {
     );
   });
 
-  it('returns up to 20 nearby places for a station', async () => {
+  it('returns up to 40 nearby places for a station', async () => {
     stationRepository.findOne.mockResolvedValue({
       id: 3,
       name: '삼성',
@@ -587,7 +585,7 @@ describe('PlacesService', () => {
 
     const result = await service.findPlacesByStation(3, 'RESTAURANT');
 
-    expect(result.places).toHaveLength(20);
+    expect(result.places).toHaveLength(40);
     expect(result.places.every((place) => place.distanceMeters !== null)).toBe(
       true,
     );

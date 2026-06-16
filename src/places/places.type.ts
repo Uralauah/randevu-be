@@ -26,6 +26,10 @@ export interface PlaceResponse {
   tagDetails?: PlaceTagResponse[];
 }
 
+export interface CandidatePlace extends PlaceResponse {
+  matchedQueries: string[];
+}
+
 export interface PlaceDateRecommendationResponse {
   station: {
     id: number;
