@@ -9,6 +9,7 @@ import { Repository } from 'typeorm';
 import { createHash } from 'crypto';
 import { SubwayStation } from '../stations/entities';
 import { NaverLocalClient, NaverLocalItem } from './naver-local.client';
+import { KakaoLocalClient } from './kakao-local.client';
 import {
   MEAL_TIMES,
   PLACE_TYPES,
@@ -79,12 +80,21 @@ const NAVER_QUERY_CONCURRENCY = 4;
 const PLACE_LIST_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const RECOMMENDATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const BLOG_QUERY_CONCURRENCY = 4;
-const BLOG_EVENT_NAME_LIMIT = 8;
+const BLOG_EVENT_NAME_LIMIT = 4;
 const DATE_RECOMMENDATION_TYPE_ORDER: PlaceType[] = [
   'ACTIVITY',
   'CAFE',
   'RESTAURANT',
 ];
+
+/** 카카오 로컬 카테고리 그룹 코드 (타입별 보강 검색용) */
+const KAKAO_CATEGORY_CODES_BY_TYPE: Record<PlaceType, string[]> = {
+  RESTAURANT: ['FD6'], // 음식점
+  CAFE: ['CE7'], // 카페
+  ACTIVITY: ['CT1', 'AT4'], // 문화시설, 관광명소
+};
+
+const KAKAO_SEARCH_SIZE = 15;
 
 @Injectable()
 export class PlacesService {
@@ -100,6 +110,8 @@ export class PlacesService {
     private readonly placeCacheRepository: Repository<PlaceCache>,
 
     private readonly naverLocalClient: NaverLocalClient,
+
+    private readonly kakaoLocalClient: KakaoLocalClient,
 
     private readonly naverBlogClient: NaverBlogClient,
 
@@ -287,7 +299,8 @@ export class PlacesService {
       this.parseCommaSeparated(excludedPlaceKeys),
     );
 
-    const cacheKey = `rec:${stationId}:${date}`;
+    // 팝업·이벤트는 월 단위로 운영되므로 역+월로 캐시해 hit rate를 높인다.
+    const cacheKey = `rec:${stationId}:${dateContext.year}-${dateContext.month}`;
     let sortedCandidates = this.getRecommendationCache(cacheKey);
 
     if (!sortedCandidates) {
@@ -359,8 +372,8 @@ export class PlacesService {
       }
 
       const priorityQueries = this.buildDatePrioritySearchQueries(base, type, dateContext);
-      let candidates = await this.fetchNaverCandidates(priorityQueries, type);
-      let nearbyCandidates = this.filterPlacesWithinStationDistance(candidates, station);
+      const candidates = await this.fetchNaverCandidates(priorityQueries, type);
+      const nearbyCandidates = this.filterPlacesWithinStationDistance(candidates, station);
       let selectedCandidates = nearbyCandidates.filter((place) =>
         this.isDateEventSearchCandidate(place, dateContext),
       );
@@ -371,9 +384,20 @@ export class PlacesService {
           type,
           dateContext,
         );
-        candidates = await this.fetchNaverCandidates(fallbackQueries, type);
-        nearbyCandidates = this.filterPlacesWithinStationDistance(candidates, station);
-        selectedCandidates = nearbyCandidates;
+        // 네이버 fallback과 카카오 반경 검색을 병렬 실행 후 병합 (추가 지연 없음)
+        const [naverFallback, kakaoCandidates] = await Promise.all([
+          this.fetchNaverCandidates(fallbackQueries, type),
+          this.fetchKakaoCandidates(station, type),
+        ]);
+        const naverNearby = this.filterPlacesWithinStationDistance(
+          naverFallback,
+          station,
+        );
+        const kakaoNearby = this.filterPlacesWithinStationDistance(
+          kakaoCandidates,
+          station,
+        );
+        selectedCandidates = this.mergeCandidatePools(naverNearby, kakaoNearby);
       }
 
       const places = this.rankPlaces(selectedCandidates, type).map((place) => ({
@@ -689,6 +713,126 @@ export class PlacesService {
     return [...merged.values()];
   }
 
+  /**
+   * 카카오 로컬 카테고리 검색으로 역 반경 내 후보를 가져온다.
+   * radius 기반이라 좌표 정확도가 높고, 네이버 키워드 결과를 보강한다.
+   */
+  private async fetchKakaoCandidates(
+    station: SubwayStation,
+    type: PlaceType,
+  ): Promise<CandidatePlace[]> {
+    const coords = this.toValidCoordinates(station);
+
+    if (!coords) {
+      return [];
+    }
+
+    const codes = KAKAO_CATEGORY_CODES_BY_TYPE[type] ?? [];
+    const merged = new Map<string, CandidatePlace>();
+
+    const results = await Promise.allSettled(
+      codes.map((code) =>
+        this.kakaoLocalClient.searchByCategory({
+          categoryGroupCode: code,
+          lat: coords.lat,
+          lng: coords.lng,
+          radius: PLACE_DISTANCE_LIMIT_METERS,
+          size: KAKAO_SEARCH_SIZE,
+        }),
+      ),
+    );
+
+    for (const result of results) {
+      if (result.status !== 'fulfilled') {
+        continue;
+      }
+
+      for (const document of result.value) {
+        const place = this.toKakaoPlaceResponse(document, type);
+
+        if (!this.isPlaceCompatibleWithType(place, type)) {
+          continue;
+        }
+
+        const key = this.getDedupKey(place);
+
+        if (!merged.has(key)) {
+          merged.set(key, { ...place, matchedQueries: ['카카오 주변'] });
+        }
+      }
+    }
+
+    return [...merged.values()];
+  }
+
+  private toKakaoPlaceResponse(
+    document: {
+      id: string;
+      place_name: string;
+      category_name: string;
+      phone: string;
+      address_name: string;
+      road_address_name: string;
+      x: string;
+      y: string;
+      place_url: string;
+      distance?: string;
+    },
+    type: PlaceType,
+  ): PlaceResponse {
+    const name = this.stripHtml(document.place_name);
+    const address = document.road_address_name || document.address_name || null;
+    const placeUrl = document.place_url || null;
+    const distanceMeters =
+      document.distance && document.distance.length > 0
+        ? Number(document.distance)
+        : null;
+
+    return {
+      placeKey: this.createPlaceKey('KAKAO', document.id, name, address),
+      kakaoPlaceId: document.id,
+      naverPlaceId: null,
+      provider: 'KAKAO',
+      type,
+      name,
+      description: '',
+      categoryName: document.category_name || '',
+      address,
+      lat: document.y ? Number(document.y) : null,
+      lng: document.x ? Number(document.x) : null,
+      distanceMeters: Number.isFinite(distanceMeters as number)
+        ? distanceMeters
+        : null,
+      phone: document.phone || null,
+      mapLink: placeUrl,
+      externalLink: placeUrl,
+      instagramLink: null,
+      reservationLink: null,
+      matchedQueries: [],
+    };
+  }
+
+  private mergeCandidatePools(
+    primary: CandidatePlace[],
+    supplementary: CandidatePlace[],
+  ): CandidatePlace[] {
+    const merged = new Map<string, CandidatePlace>();
+
+    for (const candidate of [...primary, ...supplementary]) {
+      const key = this.getDedupKey(candidate);
+      const existing = merged.get(key);
+
+      if (existing) {
+        existing.matchedQueries.push(...candidate.matchedQueries);
+        continue;
+      }
+
+      merged.set(key, { ...candidate });
+    }
+
+    return [...merged.values()];
+  }
+
   private async fetchDateEventCandidatesFromBlogs(
     station: SubwayStation,
     base: string,
@@ -741,9 +885,11 @@ export class PlacesService {
 
     this.logDateEventExtractedNames([...eventNames.values()]);
 
-    // 이벤트명 로컬 검색을 모두 병렬로 실행
-    const localSearchResults = await Promise.all(
-      [...eventNames.values()].map(async (event) => {
+    // 이벤트명 로컬 검색을 동시성 제한하에 실행 (429 burst 방지)
+    const localSearchResults = await this.mapWithConcurrency(
+      [...eventNames.values()],
+      NAVER_QUERY_CONCURRENCY,
+      async (event) => {
         const localQueries = this.buildDateEventLocalMatchQueries(event.name, station);
         const localCandidates = await this.fetchNaverCandidates(
           localQueries,
@@ -753,7 +899,7 @@ export class PlacesService {
         const nearbyCandidates = this.filterPlacesWithinStationDistance(localCandidates, station);
         this.logDateEventLocalMatchResults(event.name, localQueries, nearbyCandidates);
         return { event, nearbyCandidates };
-      }),
+      },
     );
 
     const merged = new Map<string, CandidatePlace>();
@@ -883,11 +1029,9 @@ export class PlacesService {
     station: SubwayStation,
   ) {
     const stationAreaName = this.toSearchStationAreaName(station.name);
-    const stationName = this.toSearchStationName(station.name);
 
     return [
       `${eventName} ${stationAreaName}`,
-      `${eventName} ${stationName}`,
       eventName,
     ];
   }
@@ -1111,6 +1255,34 @@ export class PlacesService {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  /**
+   * 외부 API 호출 폭주(429)를 막기 위해 동시 실행 수를 제한하며 매핑한다.
+   * 결과 순서는 입력 순서를 유지한다.
+   */
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    limit: number,
+    mapper: (item: T, index: number) => Promise<R>,
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let cursor = 0;
+
+    const workers = Array.from(
+      { length: Math.min(limit, items.length) },
+      async () => {
+        while (cursor < items.length) {
+          const index = cursor;
+          cursor += 1;
+          results[index] = await mapper(items[index], index);
+        }
+      },
+    );
+
+    await Promise.all(workers);
+
+    return results;
+  }
+
   private buildSearchQueries(
     station: SubwayStation,
     type: PlaceType,
@@ -1275,19 +1447,13 @@ export class PlacesService {
     const dateLabel = this.formatKoreanDateLabel(dateContext);
 
     if (type === 'ACTIVITY') {
+      // 고신호 쿼리만 유지 (중복 변형 제거 → 외부 호출 수 절감)
       return [
         `${dateLabel} ${base} 팝업`,
-        `${dateLabel} ${base} 이벤트`,
-        `${monthLabel} ${base} 팝업`,
         `${monthLabel} ${base} 팝업스토어`,
         `${monthLabel} ${base} 팝업 전시`,
-        `${monthLabel} ${base} 기간한정`,
         `${monthLabel} ${base} 전시`,
-        `${monthLabel} ${base} 축제`,
         `${monthLabel} ${base} 이벤트`,
-        `${monthLabel} ${base} 한정 전시`,
-        `${dateLabel} ${base} 오픈`,
-        `${dateLabel} ${base} 한정`,
       ];
     }
 

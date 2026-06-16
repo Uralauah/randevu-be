@@ -4,6 +4,7 @@ import { DateCourseItem } from '../date-courses/entities';
 import { SubwayStation } from '../stations/entities';
 import { PlaceCache } from './entities';
 import { NaverBlogClient } from './naver-blog.client';
+import { KakaoLocalClient } from './kakao-local.client';
 import { NaverLocalClient, NaverLocalItem } from './naver-local.client';
 import { PlaceTagService } from './place-tag.service';
 import { PlacesService } from './places.service';
@@ -26,6 +27,11 @@ describe('PlacesService', () => {
   };
   const naverBlogClient: jest.Mocked<Pick<NaverBlogClient, 'searchBlogs'>> = {
     searchBlogs: jest.fn(),
+  };
+  const kakaoLocalClient: jest.Mocked<
+    Pick<KakaoLocalClient, 'searchByCategory'>
+  > = {
+    searchByCategory: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -51,6 +57,10 @@ describe('PlacesService', () => {
           useValue: naverLocalClient,
         },
         {
+          provide: KakaoLocalClient,
+          useValue: kakaoLocalClient,
+        },
+        {
           provide: NaverBlogClient,
           useValue: naverBlogClient,
         },
@@ -65,6 +75,7 @@ describe('PlacesService', () => {
 
     service = module.get<PlacesService>(PlacesService);
     naverBlogClient.searchBlogs.mockResolvedValue([]);
+    kakaoLocalClient.searchByCategory.mockResolvedValue([]);
     dateCourseItemRepository.find.mockResolvedValue([]);
   });
 

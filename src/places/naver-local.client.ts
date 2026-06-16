@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { scheduleNaverRequest } from './naver-rate-limiter';
 
 export interface NaverLocalItem {
   title: string;
@@ -51,7 +52,7 @@ export class NaverLocalClient {
       query: params.query,
       display: String(params.display ?? 5),
       start: String(params.start ?? 1),
-      // sort: params.sort ?? 'comment',
+      sort: params.sort ?? 'comment',
     });
 
     for (
@@ -59,12 +60,14 @@ export class NaverLocalClient {
       attempt <= NAVER_RATE_LIMIT_RETRY_DELAYS_MS.length;
       attempt += 1
     ) {
-      const response = await fetch(`${this.baseUrl}?${query.toString()}`, {
-        headers: {
-          'X-Naver-Client-Id': clientId,
-          'X-Naver-Client-Secret': clientSecret,
-        },
-      });
+      const response = await scheduleNaverRequest(() =>
+        fetch(`${this.baseUrl}?${query.toString()}`, {
+          headers: {
+            'X-Naver-Client-Id': clientId,
+            'X-Naver-Client-Secret': clientSecret,
+          },
+        }),
+      );
 
       if (response.ok) {
         const data = (await response.json()) as NaverLocalResponse;

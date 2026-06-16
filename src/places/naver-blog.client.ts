@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { scheduleNaverRequest } from './naver-rate-limiter';
 
 export interface NaverBlogItem {
   title: string;
@@ -56,12 +57,14 @@ export class NaverBlogClient {
       attempt <= NAVER_BLOG_RATE_LIMIT_RETRY_DELAYS_MS.length;
       attempt += 1
     ) {
-      const response = await fetch(`${this.baseUrl}?${query.toString()}`, {
-        headers: {
-          'X-Naver-Client-Id': clientId,
-          'X-Naver-Client-Secret': clientSecret,
-        },
-      });
+      const response = await scheduleNaverRequest(() =>
+        fetch(`${this.baseUrl}?${query.toString()}`, {
+          headers: {
+            'X-Naver-Client-Id': clientId,
+            'X-Naver-Client-Secret': clientSecret,
+          },
+        }),
+      );
 
       if (response.ok) {
         const data = (await response.json()) as NaverBlogResponse;
