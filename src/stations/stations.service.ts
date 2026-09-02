@@ -16,6 +16,18 @@ interface GraphEdge {
   minutes: number;
 }
 
+interface TravelTimeCacheRow {
+  departureStationId: number;
+  arrivalStationId: number;
+  minTravelMinutes: number;
+}
+
+/**
+ * 한 번의 INSERT에 담을 행 수. 열이 3개이므로 5000행이면 바인딩 파라미터 15,000개로,
+ * PostgreSQL 한도(65,535)에 여유가 있다.
+ */
+const INSERT_CHUNK_SIZE = 5000;
+
 @Injectable()
 export class StationsService {
   private readonly logger = new Logger(StationsService.name);
@@ -120,11 +132,10 @@ export class StationsService {
             },
           }
         : undefined;
+    // 아래 계산은 역 ID만 쓰므로 region 관계는 조인하지 않는다.
     const stations = await this.stationRepository.find({
       where,
-      relations: {
-        region: true,
-      },
+      select: { id: true },
     });
 
     if (normalizedRegionCode && stations.length === 0) {
@@ -149,7 +160,21 @@ export class StationsService {
       await this.travelTimeCacheRepository.clear();
     }
 
-    const cacheRows: TravelTimeCache[] = [];
+    // 캐시는 역 수의 제곱만큼 늘어나므로 전부 모으지 않고 조금씩 흘려보낸다.
+    let pendingRows: TravelTimeCacheRow[] = [];
+    let cacheCount = 0;
+
+    const flushPendingRows = async () => {
+      if (pendingRows.length === 0) {
+        return;
+      }
+
+      // 위에서 비워둔 구간만 채우므로 save()의 존재 확인 없이 곧장 INSERT한다.
+      await this.travelTimeCacheRepository.insert(pendingRows);
+
+      cacheCount += pendingRows.length;
+      pendingRows = [];
+    };
 
     for (const station of stations) {
       const distances = this.calculateShortestTimesFromStation(
@@ -164,26 +189,26 @@ export class StationsService {
           continue;
         }
 
-        cacheRows.push(
-          this.travelTimeCacheRepository.create({
-            departureStationId: station.id,
-            arrivalStationId,
-            minTravelMinutes,
-          }),
-        );
+        pendingRows.push({
+          departureStationId: station.id,
+          arrivalStationId,
+          minTravelMinutes,
+        });
+
+        if (pendingRows.length >= INSERT_CHUNK_SIZE) {
+          await flushPendingRows();
+        }
       }
     }
 
-    if (cacheRows.length > 0) {
-      await this.travelTimeCacheRepository.save(cacheRows, { chunk: 1000 });
-    }
+    await flushPendingRows();
 
-    this.logger.log(`이동시간 캐시 재설정 완료: rows=${cacheRows.length}`);
+    this.logger.log(`이동시간 캐시 재설정 완료: rows=${cacheCount}`);
 
     return {
       region: normalizedRegionCode ?? null,
       stationCount: stations.length,
-      cacheCount: cacheRows.length,
+      cacheCount,
     };
   }
 
