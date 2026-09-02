@@ -8,13 +8,11 @@ import {
   TravelTimeCache,
 } from './entities';
 import { FindOptionsWhere, Repository } from 'typeorm';
-
-type GraphNodeKey = string;
-
-interface GraphEdge {
-  to: GraphNodeKey;
-  minutes: number;
-}
+import {
+  buildTravelTimeGraph,
+  ShortestTravelTimeSolver,
+  UNREACHABLE,
+} from './travel-time-graph';
 
 interface TravelTimeCacheRow {
   departureStationId: number;
@@ -152,7 +150,9 @@ export class StationsService {
       `이동시간 캐시 재생성 시작: region=${normalizedRegionCode ?? 'ALL'}, stations=${stations.length}, edges=${edges.length}, transfers=${transfers.length}`,
     );
 
-    const graph = this.buildGraph(edges, transfers);
+    const graph = buildTravelTimeGraph(edges, transfers);
+    const solver = new ShortestTravelTimeSolver(graph);
+    const { stationIds } = graph;
 
     if (regionStationIds) {
       await this.clearTravelTimeCacheByStationIds([...regionStationIds]);
@@ -177,14 +177,17 @@ export class StationsService {
     };
 
     for (const station of stations) {
-      const distances = this.calculateShortestTimesFromStation(
-        station.id,
-        graph,
-        edges,
-        transfers,
-      );
+      const minutesByStationIndex = solver.solveFrom(station.id);
 
-      for (const [arrivalStationId, minTravelMinutes] of distances.entries()) {
+      for (let i = 0; i < stationIds.length; i++) {
+        const minTravelMinutes = minutesByStationIndex[i];
+
+        if (minTravelMinutes === UNREACHABLE) {
+          continue;
+        }
+
+        const arrivalStationId = stationIds[i];
+
         if (regionStationIds && !regionStationIds.has(arrivalStationId)) {
           continue;
         }
@@ -223,137 +226,5 @@ export class StationsService {
       .where('departure_station_id IN (:...stationIds)', { stationIds })
       .orWhere('arrival_station_id IN (:...stationIds)', { stationIds })
       .execute();
-  }
-
-  private buildGraph(edges: SubwayEdge[], transfers: SubwayTransfer[]) {
-    const graph = new Map<GraphNodeKey, GraphEdge[]>();
-
-    const addEdge = (from: GraphNodeKey, to: GraphNodeKey, minutes: number) => {
-      if (!graph.has(from)) {
-        graph.set(from, []);
-      }
-
-      graph.get(from)!.push({ to, minutes });
-    };
-
-    for (const edge of edges) {
-      const from = this.toNodeKey(edge.fromStationId, edge.lineId);
-      const to = this.toNodeKey(edge.toStationId, edge.lineId);
-
-      addEdge(from, to, edge.travelMinutes);
-    }
-
-    for (const transfer of transfers) {
-      const from = this.toNodeKey(transfer.stationId, transfer.fromLineId);
-      const to = this.toNodeKey(transfer.stationId, transfer.toLineId);
-
-      addEdge(from, to, transfer.transferMinutes);
-    }
-
-    return graph;
-  }
-
-  private calculateShortestTimesFromStation(
-    departureStationId: number,
-    graph: Map<GraphNodeKey, GraphEdge[]>,
-    edges: SubwayEdge[],
-    transfers: SubwayTransfer[],
-  ) {
-    const startNodes = this.findLineNodeKeysByStationId(
-      departureStationId,
-      edges,
-      transfers,
-    );
-
-    const nodeDistances = this.dijkstra(startNodes, graph);
-    const stationDistances = new Map<number, number>();
-
-    for (const [nodeKey, minutes] of nodeDistances.entries()) {
-      const stationId = this.parseStationId(nodeKey);
-      const current = stationDistances.get(stationId);
-
-      if (current === undefined || minutes < current) {
-        stationDistances.set(stationId, minutes);
-      }
-    }
-
-    return stationDistances;
-  }
-
-  private findLineNodeKeysByStationId(
-    stationId: number,
-    edges: SubwayEdge[],
-    transfers: SubwayTransfer[],
-  ) {
-    const lineIds = new Set<number>();
-
-    for (const edge of edges) {
-      if (edge.fromStationId === stationId) {
-        lineIds.add(edge.lineId);
-      }
-
-      if (edge.toStationId === stationId) {
-        lineIds.add(edge.lineId);
-      }
-    }
-
-    for (const transfer of transfers) {
-      if (transfer.stationId === stationId) {
-        lineIds.add(transfer.fromLineId);
-        lineIds.add(transfer.toLineId);
-      }
-    }
-
-    return [...lineIds].map((lineId) => this.toNodeKey(stationId, lineId));
-  }
-
-  private dijkstra(
-    startNodes: GraphNodeKey[],
-    graph: Map<GraphNodeKey, GraphEdge[]>,
-  ) {
-    const distances = new Map<GraphNodeKey, number>();
-    const visited = new Set<GraphNodeKey>();
-    const queue: Array<{ node: GraphNodeKey; minutes: number }> = [];
-
-    for (const startNode of startNodes) {
-      distances.set(startNode, 0);
-      queue.push({ node: startNode, minutes: 0 });
-    }
-
-    while (queue.length > 0) {
-      queue.sort((a, b) => a.minutes - b.minutes);
-
-      const current = queue.shift()!;
-
-      if (visited.has(current.node)) {
-        continue;
-      }
-
-      visited.add(current.node);
-
-      const nextEdges = graph.get(current.node) ?? [];
-
-      for (const edge of nextEdges) {
-        const nextMinutes = current.minutes + edge.minutes;
-        const knownMinutes = distances.get(edge.to);
-
-        if (knownMinutes === undefined || nextMinutes < knownMinutes) {
-          distances.set(edge.to, nextMinutes);
-          queue.push({
-            node: edge.to,
-            minutes: nextMinutes,
-          });
-        }
-      }
-    }
-    return distances;
-  }
-
-  private toNodeKey(stationId: number, lineId: number) {
-    return `${stationId}:${lineId}`;
-  }
-
-  private parseStationId(nodeKey: GraphNodeKey) {
-    return Number(nodeKey.split(':')[0]);
   }
 }
