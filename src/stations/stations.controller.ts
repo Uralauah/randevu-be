@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Query } from '@nestjs/common';
+import { Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
+import { AdminApiKeyGuard } from '../auth/admin-api-key.guard';
 import { StationsService } from './stations.service';
 
 @Controller('stations')
@@ -16,6 +17,7 @@ export class StationsController {
   }
 
   @Post('travel-time-cache/rebuild')
+  @UseGuards(AdminApiKeyGuard)
   rebuildTravelTimeCache(@Query('region') region?: string) {
     return this.stationsService.rebuildTravelTimeCache(region);
   }
