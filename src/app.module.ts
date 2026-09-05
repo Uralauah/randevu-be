@@ -7,6 +7,7 @@ import { PlacesModule } from './places/places.module';
 import { DateCoursesModule } from './date-courses/date-courses.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { createTypeOrmOptions } from './database/typeorm-options';
 
 @Module({
   imports: [
@@ -16,16 +17,7 @@ import { UsersModule } from './users/users.module';
 
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
-        host: configService.get<string>('DATABASE_HOST'),
-        port: configService.get<number>('DATABASE_PORT'),
-        username: configService.get<string>('DATABASE_USERNAME'),
-        password: configService.get<string>('DATABASE_PASSWORD'),
-        database: configService.get<string>('DATABASE_NAME'),
-        autoLoadEntities: true,
-        synchronize: configService.get<string>('NODE_ENV') !== 'production',
-      }),
+      useFactory: createTypeOrmOptions,
     }),
 
     StationsModule,
