@@ -1,13 +1,8 @@
+import { ConflictException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { StationsService } from './stations.service';
-import {
-  Region,
-  SubwayEdge,
-  SubwayStation,
-  SubwayTransfer,
-  TravelTimeCache,
-} from './entities';
+import { Region, SubwayEdge, SubwayStation, SubwayTransfer } from './entities';
 
 /**
  * 테스트용 노선도
@@ -56,12 +51,54 @@ interface CacheRow {
 }
 
 describe('StationsService - 이동시간 캐시 재생성', () => {
+  /**
+   * 트랜잭션 안에서 실행된 SQL을 순서대로 기록하고, INSERT로 넘어온 열별 배열을
+   * 다시 행으로 펼쳐 둔다. 실제 DB 동작(MVCC, 락)은 통합 검증에서 따로 확인한다.
+   */
   const createService = async (options: {
     stations?: SubwayStation[];
     edges?: SubwayEdge[];
     transfers?: SubwayTransfer[];
+    lockAvailable?: boolean;
   }) => {
     const savedRows: CacheRow[] = [];
+    const executedSql: string[] = [];
+    const deleteParams: unknown[][] = [];
+
+    const manager = {
+      query: jest.fn((sql: string, params: unknown[] = []) => {
+        const statement = sql.trim().replace(/\s+/g, ' ');
+        executedSql.push(statement);
+
+        if (statement.includes('pg_try_advisory_xact_lock')) {
+          return Promise.resolve([{ locked: options.lockAvailable ?? true }]);
+        }
+
+        if (statement.startsWith('DELETE')) {
+          deleteParams.push(params);
+        }
+
+        if (statement.startsWith('INSERT')) {
+          const [departures, arrivals, minutes] = params as number[][];
+
+          departures.forEach((departureStationId, i) =>
+            savedRows.push({
+              departureStationId,
+              arrivalStationId: arrivals[i],
+              minTravelMinutes: minutes[i],
+            }),
+          );
+        }
+
+        return Promise.resolve([]);
+      }),
+    };
+
+    const dataSource = {
+      transaction: jest.fn((work: (m: typeof manager) => Promise<unknown>) =>
+        work(manager),
+      ),
+    };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -86,22 +123,16 @@ describe('StationsService - 이동시간 캐시 재생성', () => {
             find: jest.fn().mockResolvedValue(options.transfers ?? []),
           },
         },
-        {
-          provide: getRepositoryToken(TravelTimeCache),
-          useValue: {
-            clear: jest.fn().mockResolvedValue(undefined),
-            insert: jest.fn((rows: CacheRow[]) => {
-              savedRows.push(...rows);
-              return Promise.resolve({ identifiers: [] });
-            }),
-          },
-        },
+        { provide: getDataSourceToken(), useValue: dataSource },
       ],
     }).compile();
 
     return {
       service: moduleRef.get(StationsService),
       savedRows,
+      executedSql,
+      deleteParams,
+      dataSource,
     };
   };
 
@@ -208,5 +239,64 @@ describe('StationsService - 이동시간 캐시 재생성', () => {
         minutesBetween(savedRows, row.arrivalStationId, row.departureStationId),
       ).toBe(row.minTravelMinutes);
     }
+  });
+
+  it('지우기와 채우기를 한 트랜잭션에서 하고, TRUNCATE 대신 DELETE를 쓴다', async () => {
+    const { service, executedSql, dataSource } = await createService({
+      stations: buildStations(),
+      edges: buildEdges(),
+      transfers: buildTransfers(5),
+    });
+
+    await service.rebuildTravelTimeCache();
+
+    expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(executedSql[0]).toContain('pg_try_advisory_xact_lock');
+    expect(executedSql[1]).toBe('DELETE FROM travel_time_cache');
+    expect(
+      executedSql.slice(2, -1).every((sql) => sql.startsWith('INSERT')),
+    ).toBe(true);
+    expect(executedSql.at(-1)).toBe('ANALYZE travel_time_cache');
+    expect(executedSql.some((sql) => sql.includes('TRUNCATE'))).toBe(false);
+  });
+
+  it('이미 재생성 중이면 409를 던지고 캐시를 건드리지 않는다', async () => {
+    const { service, executedSql } = await createService({
+      stations: buildStations(),
+      edges: buildEdges(),
+      transfers: buildTransfers(5),
+      lockAvailable: false,
+    });
+
+    await expect(service.rebuildTravelTimeCache()).rejects.toThrow(
+      ConflictException,
+    );
+    expect(executedSql.some((sql) => sql.startsWith('DELETE'))).toBe(false);
+    expect(executedSql.some((sql) => sql.startsWith('INSERT'))).toBe(false);
+  });
+
+  it('지역 재생성은 그 지역 출발 행만 지우고, 전체 재생성과 같은 행을 만든다', async () => {
+    const full = await createService({
+      stations: buildStations(),
+      edges: buildEdges(),
+      transfers: buildTransfers(5),
+    });
+    await full.service.rebuildTravelTimeCache();
+
+    const regionStations = [1, 2].map((id) => ({ id })) as SubwayStation[];
+    const region = await createService({
+      stations: regionStations,
+      edges: buildEdges(),
+      transfers: buildTransfers(5),
+    });
+    await region.service.rebuildTravelTimeCache('seoul');
+
+    expect(region.executedSql[1]).toBe(
+      'DELETE FROM travel_time_cache WHERE departure_station_id = ANY($1::int[])',
+    );
+    expect(region.deleteParams[0]).toEqual([[1, 2]]);
+    expect(region.savedRows).toEqual(
+      full.savedRows.filter((row) => [1, 2].includes(row.departureStationId)),
+    );
   });
 });
