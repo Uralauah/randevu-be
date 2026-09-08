@@ -230,14 +230,6 @@ export function scoreBranchLikeName(name: string) {
   return penalty;
 }
 
-export function delay(ms: number) {
-  if (process.env.NODE_ENV === 'test') {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * 외부 API 호출 폭주(429)를 막기 위해 동시 실행 수를 제한하며 매핑한다.
  * 결과 순서는 입력 순서를 유지한다.

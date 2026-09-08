@@ -22,6 +22,9 @@ interface KakaoLocalResponse {
   documents: KakaoPlaceDocument[];
 }
 
+/** 응답이 멈춘 외부 API 때문에 요청 전체가 붙잡히지 않도록 대기 상한을 둔다. */
+const KAKAO_REQUEST_TIMEOUT_MS = 3_000;
+
 interface SearchCategoryParams {
   categoryGroupCode: string;
   lat: number;
@@ -62,11 +65,28 @@ export class KakaoLocalClient {
 
     const url = `${this.baseUrl}?${query.toString()}`;
 
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `KakaoAK ${restApiKey}`,
-      },
-    });
+    let response: Response;
+
+    try {
+      response = await fetch(url, {
+        headers: {
+          Authorization: `KakaoAK ${restApiKey}`,
+        },
+        signal: AbortSignal.timeout(KAKAO_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      this.logger.error(
+        `카카오 로컬 API 호출 실패: ${
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error)
+        }`,
+      );
+
+      throw new InternalServerErrorException(
+        '장소 추천을 불러오지 못했습니다.',
+      );
+    }
 
     if (!response.ok) {
       const body = await response.text();

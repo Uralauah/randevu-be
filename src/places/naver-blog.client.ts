@@ -4,7 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { scheduleNaverRequest } from './naver-rate-limiter';
+import { requestNaverSearch } from './naver-search-request';
 
 export interface NaverBlogItem {
   title: string;
@@ -25,8 +25,6 @@ interface SearchBlogParams {
   start?: number;
   sort?: 'sim' | 'date';
 }
-
-const NAVER_BLOG_RATE_LIMIT_RETRY_DELAYS_MS = [500, 1_000];
 
 @Injectable()
 export class NaverBlogClient {
@@ -52,52 +50,15 @@ export class NaverBlogClient {
       sort: params.sort ?? 'sim',
     });
 
-    for (
-      let attempt = 0;
-      attempt <= NAVER_BLOG_RATE_LIMIT_RETRY_DELAYS_MS.length;
-      attempt += 1
-    ) {
-      const response = await scheduleNaverRequest(() =>
-        fetch(`${this.baseUrl}?${query.toString()}`, {
-          headers: {
-            'X-Naver-Client-Id': clientId,
-            'X-Naver-Client-Secret': clientSecret,
-          },
-        }),
-      );
+    const data = await requestNaverSearch<NaverBlogResponse>({
+      url: `${this.baseUrl}?${query.toString()}`,
+      clientId,
+      clientSecret,
+      label: '블로그 검색',
+      failureMessage: '장소 상세 정보를 불러오지 못했습니다.',
+      logger: this.logger,
+    });
 
-      if (response.ok) {
-        const data = (await response.json()) as NaverBlogResponse;
-
-        return data.items;
-      }
-
-      const body = await response.text();
-      const retryDelayMs = NAVER_BLOG_RATE_LIMIT_RETRY_DELAYS_MS[attempt];
-
-      if (response.status === 429 && retryDelayMs !== undefined) {
-        this.logger.warn(
-          `네이버 블로그 검색 속도 제한으로 재시도: attempt=${attempt + 1}, delayMs=${retryDelayMs}`,
-        );
-        await this.delay(retryDelayMs);
-        continue;
-      }
-
-      this.logger.error(
-        `네이버 블로그 검색 API 호출 실패: status=${response.status}, body=${body}`,
-      );
-
-      throw new InternalServerErrorException(
-        '장소 상세 정보를 불러오지 못했습니다.',
-      );
-    }
-
-    throw new InternalServerErrorException(
-      '장소 상세 정보를 불러오지 못했습니다.',
-    );
-  }
-
-  private delay(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+    return data.items;
   }
 }

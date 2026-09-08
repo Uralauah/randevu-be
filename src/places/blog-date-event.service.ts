@@ -9,13 +9,11 @@ import {
   DATE_EVENT_NAME_STOPWORDS,
   DATE_LIMITED_EVENT_KEYWORDS,
   NAVER_BLOG_DISPLAY_PER_QUERY,
-  NAVER_LOCAL_QUERY_DELAY_MS,
   NAVER_QUERY_CONCURRENCY,
 } from './places.constants';
 import {
   createPlaceKey,
   DateRecommendationContext,
-  delay,
   escapeRegExp,
   formatKoreanMonthLabel,
   getDedupKey,
@@ -56,7 +54,7 @@ export class BlogDateEventService {
     );
     const eventNames = new Map<string, BlogDateEvent>();
 
-    // 블로그 쿼리 병렬 배치 실행
+    // 블로그 쿼리 병렬 배치 실행. 이벤트명을 충분히 모으면 다음 배치는 호출하지 않는다.
     for (let i = 0; i < blogQueries.length; i += BLOG_QUERY_CONCURRENCY) {
       const batch = blogQueries.slice(i, i + BLOG_QUERY_CONCURRENCY);
       const batchResults = await Promise.all(
@@ -104,10 +102,6 @@ export class BlogDateEventService {
       }
 
       if (eventNames.size >= BLOG_EVENT_NAME_LIMIT) break;
-
-      if (i + BLOG_QUERY_CONCURRENCY < blogQueries.length) {
-        await delay(NAVER_LOCAL_QUERY_DELAY_MS);
-      }
     }
 
     this.logDateEventExtractedNames([...eventNames.values()]);

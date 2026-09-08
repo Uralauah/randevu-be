@@ -1,5 +1,13 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { SocialLoginDto } from './dto/social-login.dto';
+
+/** 소셜 서버가 응답하지 않을 때 로그인 요청이 끝없이 붙잡히지 않도록 대기 상한을 둔다. */
+const SOCIAL_AUTH_REQUEST_TIMEOUT_MS = 5_000;
 
 export interface SocialProfile {
   provider: 'KAKAO' | 'GOOGLE' | 'NAVER';
@@ -9,6 +17,8 @@ export interface SocialProfile {
 
 @Injectable()
 export class SocialAuthService {
+  private readonly logger = new Logger(SocialAuthService.name);
+
   async fetchProfile(dto: SocialLoginDto): Promise<SocialProfile> {
     if (dto.provider === 'KAKAO') {
       return this.fetchKakaoProfile(dto);
@@ -41,7 +51,7 @@ export class SocialAuthService {
       throw new UnauthorizedException('카카오 로그인 정보가 없습니다.');
     }
 
-    const response = await fetch('https://kapi.kakao.com/v2/user/me', {
+    const response = await this.request('https://kapi.kakao.com/v2/user/me', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -76,7 +86,7 @@ export class SocialAuthService {
       code,
     });
 
-    const response = await fetch('https://kauth.kakao.com/oauth/token', {
+    const response = await this.request('https://kauth.kakao.com/oauth/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
@@ -95,7 +105,7 @@ export class SocialAuthService {
   private async fetchGoogleProfile(
     accessToken: string,
   ): Promise<SocialProfile> {
-    const response = await fetch(
+    const response = await this.request(
       'https://www.googleapis.com/oauth2/v3/userinfo',
       {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -119,10 +129,8 @@ export class SocialAuthService {
     };
   }
 
-  private async fetchNaverProfile(
-    accessToken: string,
-  ): Promise<SocialProfile> {
-    const response = await fetch('https://openapi.naver.com/v1/nid/me', {
+  private async fetchNaverProfile(accessToken: string): Promise<SocialProfile> {
+    const response = await this.request('https://openapi.naver.com/v1/nid/me', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -137,8 +145,28 @@ export class SocialAuthService {
     return {
       provider: 'NAVER',
       providerId: data.response.id,
-      nickname:
-        data.response.nickname ?? data.response.name ?? '네이버 사용자',
+      nickname: data.response.nickname ?? data.response.name ?? '네이버 사용자',
     };
+  }
+
+  private async request(url: string, init: RequestInit) {
+    try {
+      return await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(SOCIAL_AUTH_REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      this.logger.error(
+        `소셜 로그인 API 호출 실패: url=${new URL(url).host}, error=${
+          error instanceof Error
+            ? `${error.name}: ${error.message}`
+            : String(error)
+        }`,
+      );
+
+      throw new ServiceUnavailableException(
+        '로그인 서버와 통신하지 못했습니다. 잠시 후 다시 시도해 주세요.',
+      );
+    }
   }
 }

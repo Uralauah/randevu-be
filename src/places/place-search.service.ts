@@ -14,7 +14,6 @@ import {
   KAKAO_CATEGORY_CODES_BY_TYPE,
   KAKAO_SEARCH_SIZE,
   NAVER_DISPLAY_PER_QUERY,
-  NAVER_LOCAL_QUERY_DELAY_MS,
   NAVER_QUERY_CONCURRENCY,
   PLACE_CATEGORY_CONFIG,
   PLACE_DISTANCE_LIMIT_METERS,
@@ -24,11 +23,11 @@ import {
   classifyPlaceLink,
   createPlaceKey,
   DateRecommendationContext,
-  delay,
   extractNaverPlaceId,
   formatKoreanDateLabel,
   formatKoreanMonthLabel,
   getDedupKey,
+  mapWithConcurrency,
   normalize,
   stripHtml,
   toSearchLocationName,
@@ -54,37 +53,28 @@ export class PlaceSearchService {
     type: PlaceType,
     options: FetchNaverCandidateOptions = {},
   ): Promise<CandidatePlace[]> {
-    const results: { query: string; items: NaverLocalItem[] }[] = [];
-    let rejectedCount = 0;
-
-    // 배치 단위로 요청하고 배치 사이에 짧은 간격을 둬 네이버 429(rate limit) 버스트를
-    // 완화한다. 전역 NaverRateLimiter와 함께 burst를 평탄화한다.
-    for (let i = 0; i < queries.length; i += NAVER_QUERY_CONCURRENCY) {
-      const batch = queries.slice(i, i + NAVER_QUERY_CONCURRENCY);
-      const batchResults = await Promise.allSettled(
-        batch.map((query) =>
-          this.naverLocalClient
-            .searchLocal({
-              query,
-              display: NAVER_DISPLAY_PER_QUERY,
-              sort: 'comment',
-            })
-            .then((items) => ({ query, items })),
-        ),
-      );
-
-      for (const result of batchResults) {
-        if (result.status === 'fulfilled') {
-          results.push(result.value);
-        } else {
-          rejectedCount += 1;
-        }
-      }
-
-      if (i + NAVER_QUERY_CONCURRENCY < queries.length) {
-        await delay(NAVER_LOCAL_QUERY_DELAY_MS);
-      }
-    }
+    // 요청 하나가 대기열을 독차지하지 않도록 동시에 4개까지만 넣는다. 호출 간격과 전역 동시성은
+    // 네이버 스케줄러가 맡으므로, 여기서 묶음 사이에 따로 쉬지 않는다(이중 감속 제거).
+    const settledResults = await mapWithConcurrency(
+      queries,
+      NAVER_QUERY_CONCURRENCY,
+      (query) =>
+        this.naverLocalClient
+          .searchLocal({
+            query,
+            display: NAVER_DISPLAY_PER_QUERY,
+            sort: 'comment',
+          })
+          .then(
+            (items) => ({ query, items }),
+            () => null,
+          ),
+    );
+    const results = settledResults.filter(
+      (result): result is { query: string; items: NaverLocalItem[] } =>
+        result !== null,
+    );
+    const rejectedCount = settledResults.length - results.length;
 
     if (rejectedCount > 0) {
       this.logger.warn(
