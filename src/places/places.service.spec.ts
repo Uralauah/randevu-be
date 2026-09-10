@@ -1,3 +1,4 @@
+import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DateCourseItem } from '../date-courses/entities';
@@ -676,6 +677,59 @@ describe('PlacesService', () => {
     );
     expect(result.places[0].name).toBe('성수 브랜드 팝업스토어');
     expect(result.places[0].type).toBe('ACTIVITY');
+  });
+
+  it('같은 역 목록 요청이 동시에 몰려도 외부 검색은 한 번분만 호출한다', async () => {
+    stationRepository.findOne.mockResolvedValue({
+      id: 21,
+      name: '삼성',
+      lat: 37.5088,
+      lng: 127.0631,
+      region: {
+        name: '서울',
+      },
+    });
+    naverLocalClient.searchLocal.mockResolvedValue([
+      createNaverLocalItem({
+        id: 1,
+        title: '데이트 맛집',
+        lat: 37.5089,
+        lng: 127.0632,
+      }),
+    ]);
+
+    await service.findPlacesByStation(21, 'RESTAURANT');
+    const callsForOneRequest = naverLocalClient.searchLocal.mock.calls.length;
+
+    naverLocalClient.searchLocal.mockClear();
+    stationRepository.findOne.mockResolvedValue({
+      id: 22,
+      name: '역삼',
+      lat: 37.5006,
+      lng: 127.0364,
+      region: {
+        name: '서울',
+      },
+    });
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        service.findPlacesByStation(22, 'RESTAURANT'),
+      ),
+    );
+
+    expect(callsForOneRequest).toBeGreaterThan(0);
+    expect(naverLocalClient.searchLocal).toHaveBeenCalledTimes(
+      callsForOneRequest,
+    );
+    expect(new Set(results.map((result) => result.places)).size).toBe(1);
+  });
+
+  it('너무 긴 검색어는 외부 API를 부르기 전에 거절한다', async () => {
+    await expect(
+      service.searchPlacesByKeyword('가'.repeat(101), 'CAFE'),
+    ).rejects.toThrow(BadRequestException);
+    expect(naverLocalClient.searchLocal).not.toHaveBeenCalled();
   });
 });
 

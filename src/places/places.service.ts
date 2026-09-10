@@ -9,7 +9,6 @@ import { Repository } from 'typeorm';
 import { SubwayStation } from '../stations/entities';
 import { NaverLocalClient } from './naver-local.client';
 import {
-  CandidatePlace,
   MEAL_TIMES,
   PLACE_TYPES,
   MealTime,
@@ -26,14 +25,19 @@ import { PlaceSearchService } from './place-search.service';
 import { BlogDateEventService } from './blog-date-event.service';
 import {
   DATE_RECOMMENDATION_TYPE_ORDER,
+  KEYWORD_SEARCH_CACHE_MAX_ENTRIES,
   KEYWORD_SEARCH_DISPLAY,
   KEYWORD_SEARCH_DISTANCE_LIMIT_METERS,
+  KEYWORD_SEARCH_MAX_QUERY_LENGTH,
   PLACE_CATEGORY_CONFIG,
+  PLACE_LIST_CACHE_MAX_ENTRIES,
   PLACE_LIST_CACHE_TTL_MS,
   PLACE_SEARCH_DISPLAY,
+  RECOMMENDATION_CACHE_MAX_ENTRIES,
   RECOMMENDATION_CACHE_TTL_MS,
   RESPONSE_LIMIT_BY_TYPE,
 } from './places.constants';
+import { TtlLruCache } from '../common/ttl-lru-cache';
 import {
   calculateStraightLineDistanceMeters,
   Coordinates,
@@ -56,14 +60,24 @@ interface CoursePlaceExclusions {
 @Injectable()
 export class PlacesService {
   private readonly logger = new Logger(PlacesService.name);
-  private readonly placeListCache = new Map<
+  private readonly placeListCache = new TtlLruCache<string, PlaceResponse[]>({
+    maxEntries: PLACE_LIST_CACHE_MAX_ENTRIES,
+    ttlMs: PLACE_LIST_CACHE_TTL_MS,
+  });
+  private readonly keywordSearchCache = new TtlLruCache<
     string,
-    { places: PlaceResponse[]; expiresAt: number }
-  >();
-  private readonly recommendationCache = new Map<
+    PlaceResponse[]
+  >({
+    maxEntries: KEYWORD_SEARCH_CACHE_MAX_ENTRIES,
+    ttlMs: PLACE_LIST_CACHE_TTL_MS,
+  });
+  private readonly recommendationCache = new TtlLruCache<
     string,
-    { candidates: PlaceResponse[]; expiresAt: number }
-  >();
+    PlaceResponse[]
+  >({
+    maxEntries: RECOMMENDATION_CACHE_MAX_ENTRIES,
+    ttlMs: RECOMMENDATION_CACHE_TTL_MS,
+  });
 
   constructor(
     @InjectRepository(SubwayStation)
@@ -112,17 +126,9 @@ export class PlacesService {
 
     const normalizedCategory = this.normalizeCategory(type, category);
     const cacheKey = `${stationId}:${type}:${mealTime ?? 'none'}:${normalizedCategory ?? 'all'}`;
-    let allPlaces = this.getPlaceListCache(cacheKey);
-
-    if (!allPlaces) {
-      allPlaces = await this.searchPlaces(
-        station,
-        type,
-        mealTime,
-        normalizedCategory,
-      );
-      this.setPlaceListCache(cacheKey, allPlaces);
-    }
+    const allPlaces = await this.placeListCache.getOrLoad(cacheKey, () =>
+      this.searchPlaces(station, type, mealTime, normalizedCategory),
+    );
 
     const places = this.filterExcludedPlaces(allPlaces, exclusions);
 
@@ -159,18 +165,30 @@ export class PlacesService {
       return { source: 'NAVER' as const, type, query, places: [] };
     }
 
+    if (query.length > KEYWORD_SEARCH_MAX_QUERY_LENGTH) {
+      throw new BadRequestException(
+        `검색어는 ${KEYWORD_SEARCH_MAX_QUERY_LENGTH}자 이하로 입력해주세요.`,
+      );
+    }
+
     // 역 정보를 한 번만 로드 (검색어 보강 + 거리 계산에 공통 사용)
     const station = stationId
       ? await this.stationRepository.findOne({ where: { id: stationId } })
       : null;
 
     const cacheKey = `search:${type}:${stationId ?? 'none'}:${normalize(query)}`;
-    const cached = this.getPlaceListCache(cacheKey);
+    const places = await this.keywordSearchCache.getOrLoad(cacheKey, () =>
+      this.searchPlacesByKeywordWithoutCache(query, type, station),
+    );
 
-    if (cached) {
-      return { source: 'NAVER' as const, type, query, places: cached };
-    }
+    return { source: 'NAVER' as const, type, query, places };
+  }
 
+  private async searchPlacesByKeywordWithoutCache(
+    query: string,
+    type: PlaceType,
+    station: SubwayStation | null,
+  ): Promise<PlaceResponse[]> {
     // 지역명이 없으면 역 지역명을 앞에 추가해 주변 결과 우선 노출
     const searchQuery = station
       ? this.buildLocationAwareQuery(query, station)
@@ -218,9 +236,8 @@ export class PlacesService {
       : candidates;
 
     this.cachePlacesInBackground(places);
-    this.setPlaceListCache(cacheKey, places);
 
-    return { source: 'NAVER' as const, type, query, places };
+    return places;
   }
 
   /**
@@ -276,15 +293,10 @@ export class PlacesService {
 
     // 팝업·이벤트는 월 단위로 운영되므로 역+월로 캐시해 hit rate를 높인다.
     const cacheKey = `rec:${stationId}:${dateContext.year}-${dateContext.month}`;
-    let sortedCandidates = this.getRecommendationCache(cacheKey);
-
-    if (!sortedCandidates) {
-      sortedCandidates = await this.buildRecommendationCandidates(
-        station,
-        dateContext,
-      );
-      this.setRecommendationCache(cacheKey, sortedCandidates);
-    }
+    const sortedCandidates = await this.recommendationCache.getOrLoad(
+      cacheKey,
+      () => this.buildRecommendationCandidates(station, dateContext),
+    );
 
     const available = this.filterExcludedPlaces(sortedCandidates, exclusions);
     const recommendations = available.filter(
@@ -496,51 +508,6 @@ export class PlacesService {
       .split(',')
       .map((v) => v.trim())
       .filter(Boolean);
-  }
-
-  private getRecommendationCache(key: string): PlaceResponse[] | null {
-    const entry = this.recommendationCache.get(key);
-
-    if (!entry) return null;
-
-    if (Date.now() > entry.expiresAt) {
-      this.recommendationCache.delete(key);
-      return null;
-    }
-
-    return entry.candidates;
-  }
-
-  private setRecommendationCache(
-    key: string,
-    candidates: PlaceResponse[],
-  ): void {
-    this.recommendationCache.set(key, {
-      candidates,
-      expiresAt: Date.now() + RECOMMENDATION_CACHE_TTL_MS,
-    });
-  }
-
-  private getPlaceListCache(key: string): PlaceResponse[] | null {
-    const entry = this.placeListCache.get(key);
-
-    if (!entry) {
-      return null;
-    }
-
-    if (Date.now() > entry.expiresAt) {
-      this.placeListCache.delete(key);
-      return null;
-    }
-
-    return entry.places;
-  }
-
-  private setPlaceListCache(key: string, places: PlaceResponse[]): void {
-    this.placeListCache.set(key, {
-      places,
-      expiresAt: Date.now() + PLACE_LIST_CACHE_TTL_MS,
-    });
   }
 
   private createEmptyCoursePlaceExclusions(): CoursePlaceExclusions {

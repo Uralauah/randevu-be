@@ -18,6 +18,15 @@ export const EARTH_RADIUS_METERS = 6_371_000;
 export const NAVER_QUERY_CONCURRENCY = 4;
 export const PLACE_LIST_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 export const RECOMMENDATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+/**
+ * 인메모리 캐시 항목 수 상한. 목록 항목 하나는 장소 최대 40개(수십 KB)라
+ * 상한이 없으면 키 종류만큼 메모리가 계속 늘어난다.
+ */
+export const PLACE_LIST_CACHE_MAX_ENTRIES = 500;
+/** 검색어는 사용자가 마음대로 입력하므로 목록 캐시와 나누고 상한을 더 작게 둔다. */
+export const KEYWORD_SEARCH_CACHE_MAX_ENTRIES = 200;
+export const RECOMMENDATION_CACHE_MAX_ENTRIES = 300;
+export const KEYWORD_SEARCH_MAX_QUERY_LENGTH = 100;
 export const BLOG_QUERY_CONCURRENCY = 4;
 export const BLOG_EVENT_NAME_LIMIT = 4;
 export const DATE_RECOMMENDATION_TYPE_ORDER: PlaceType[] = [
