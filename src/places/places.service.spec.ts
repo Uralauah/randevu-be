@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DateCourseItem } from '../date-courses/entities';
@@ -723,6 +723,77 @@ describe('PlacesService', () => {
       callsForOneRequest,
     );
     expect(new Set(results.map((result) => result.places)).size).toBe(1);
+  });
+
+  describe('findPlaceDetail', () => {
+    const storedPlace = (placeKey: string) =>
+      ({
+        placeKey,
+        provider: 'NAVER',
+        externalId: '1',
+        placeType: 'RESTAURANT',
+        name: '데이트 맛집',
+        summary: null,
+        description: null,
+        categoryName: '음식점 > 양식',
+        address: '서울 강남구 테스트로 1',
+        lat: '37.5089000',
+        lng: '127.0632000',
+        phone: null,
+        openingHours: '알 수 없음',
+        externalLink: null,
+        mapLink: null,
+        instagramLink: null,
+        reservationLink: null,
+        tags: [],
+        tagDetails: [],
+        tagCachedAt: new Date(),
+      }) as unknown as PlaceCache;
+
+    it('목록 응답 직후 저장이 끝나기 전에 조회해도 404 대신 그 자리에서 저장해 응답한다', async () => {
+      stationRepository.findOne.mockResolvedValue({
+        id: 31,
+        name: '삼성',
+        lat: 37.5088,
+        lng: 127.0631,
+        region: { name: '서울' },
+      });
+      naverLocalClient.searchLocal.mockResolvedValue([
+        createNaverLocalItem({
+          id: 1,
+          title: '데이트 맛집',
+          lat: 37.5089,
+          lng: 127.0632,
+        }),
+      ]);
+      // 백그라운드 저장이 아직 끝나지 않은(또는 실패한) 상황
+      placeCacheRepository.upsert.mockReturnValueOnce(new Promise(() => {}));
+
+      const list = await service.findPlacesByStation(31, 'RESTAURANT');
+      const { placeKey } = list.places[0];
+
+      placeCacheRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(storedPlace(placeKey));
+      placeCacheRepository.upsert.mockResolvedValueOnce(undefined);
+
+      const detail = await service.findPlaceDetail(placeKey);
+
+      expect(detail.placeKey).toBe(placeKey);
+      expect(placeCacheRepository.upsert).toHaveBeenLastCalledWith(
+        [expect.objectContaining({ placeKey })],
+        ['placeKey'],
+      );
+    });
+
+    it('최근에 응답한 적도 없고 저장된 적도 없는 장소는 404다', async () => {
+      placeCacheRepository.findOne.mockResolvedValueOnce(null);
+
+      await expect(service.findPlaceDetail('naver:unknown')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(placeCacheRepository.upsert).not.toHaveBeenCalled();
+    });
   });
 
   it('너무 긴 검색어는 외부 API를 부르기 전에 거절한다', async () => {

@@ -33,6 +33,7 @@ import {
   PLACE_LIST_CACHE_MAX_ENTRIES,
   PLACE_LIST_CACHE_TTL_MS,
   PLACE_SEARCH_DISPLAY,
+  RECENT_PLACE_MAX_ENTRIES,
   RECOMMENDATION_CACHE_MAX_ENTRIES,
   RECOMMENDATION_CACHE_TTL_MS,
   RESPONSE_LIMIT_BY_TYPE,
@@ -77,6 +78,14 @@ export class PlacesService {
   >({
     maxEntries: RECOMMENDATION_CACHE_MAX_ENTRIES,
     ttlMs: RECOMMENDATION_CACHE_TTL_MS,
+  });
+  /**
+   * 최근 응답에 내보낸 장소. 상세 조회 시 DB 저장이 아직 끝나지 않았거나 실패했으면
+   * 여기서 꺼내 그 자리에서 저장한다. 객체는 목록 캐시와 같은 참조라 추가 메모리는 작다.
+   */
+  private readonly recentPlaces = new TtlLruCache<string, PlaceResponse>({
+    maxEntries: RECENT_PLACE_MAX_ENTRIES,
+    ttlMs: PLACE_LIST_CACHE_TTL_MS,
   });
 
   constructor(
@@ -132,6 +141,8 @@ export class PlacesService {
 
     const places = this.filterExcludedPlaces(allPlaces, exclusions);
 
+    this.rememberRecentPlaces(places);
+
     return {
       station: {
         id: station.id,
@@ -180,6 +191,8 @@ export class PlacesService {
     const places = await this.keywordSearchCache.getOrLoad(cacheKey, () =>
       this.searchPlacesByKeywordWithoutCache(query, type, station),
     );
+
+    this.rememberRecentPlaces(places);
 
     return { source: 'NAVER' as const, type, query, places };
   }
@@ -308,6 +321,7 @@ export class PlacesService {
       throw new NotFoundException('추천할 장소를 찾을 수 없습니다.');
     }
 
+    this.rememberRecentPlaces([recommendation]);
     this.cachePlacesInBackground([recommendation]);
 
     return {
@@ -631,9 +645,7 @@ export class PlacesService {
   }
 
   async findPlaceDetail(placeKey: string): Promise<PlaceDetailResponse> {
-    const place = await this.placeCacheRepository.findOne({
-      where: { placeKey },
-    });
+    const place = await this.findStoredPlace(placeKey);
 
     if (!place) {
       throw new NotFoundException('장소 정보를 찾을 수 없습니다.');
@@ -645,9 +657,40 @@ export class PlacesService {
   }
 
   /**
+   * 장소 저장은 목록 응답 뒤 백그라운드로 하므로, 사용자가 목록을 받자마자 상세를 누르면
+   * 저장보다 조회가 먼저 도착할 수 있다. 백그라운드 저장이 실패한 경우도 마찬가지다.
+   * DB에 없으면 최근 응답한 장소로 그 자리에서 저장(upsert라 중복 저장돼도 안전)한 뒤 다시 읽는다.
+   */
+  private async findStoredPlace(placeKey: string) {
+    const stored = await this.placeCacheRepository.findOne({
+      where: { placeKey },
+    });
+
+    if (stored) {
+      return stored;
+    }
+
+    const recentPlace = this.recentPlaces.get(placeKey);
+
+    if (!recentPlace) {
+      return null;
+    }
+
+    await this.cachePlaces([recentPlace]);
+
+    return this.placeCacheRepository.findOne({ where: { placeKey } });
+  }
+
+  /**
    * 장소 영속 캐시 저장은 응답 경로의 임계 지연에 포함될 필요가 없다.
    * (상세 조회 시점에 사용되는 보조 데이터) 백그라운드로 수행해 응답을 먼저 반환한다.
    */
+  private rememberRecentPlaces(places: PlaceResponse[]) {
+    for (const place of places) {
+      this.recentPlaces.set(place.placeKey, place);
+    }
+  }
+
   private cachePlacesInBackground(places: PlaceResponse[]): void {
     void this.cachePlaces(places).catch((error) =>
       this.logger.warn(

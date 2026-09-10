@@ -27,6 +27,8 @@ export const PLACE_LIST_CACHE_MAX_ENTRIES = 500;
 export const KEYWORD_SEARCH_CACHE_MAX_ENTRIES = 200;
 export const RECOMMENDATION_CACHE_MAX_ENTRIES = 300;
 export const KEYWORD_SEARCH_MAX_QUERY_LENGTH = 100;
+/** 상세 조회 대비로 기억해 두는 최근 응답 장소 수 */
+export const RECENT_PLACE_MAX_ENTRIES = 5_000;
 export const BLOG_QUERY_CONCURRENCY = 4;
 export const BLOG_EVENT_NAME_LIMIT = 4;
 export const DATE_RECOMMENDATION_TYPE_ORDER: PlaceType[] = [
