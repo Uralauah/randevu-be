@@ -13,7 +13,7 @@ import { StationsService } from '../stations/stations.service';
  *   npm run cache:rebuild            # 전체
  *   npm run cache:rebuild -- seoul   # 지역 하나
  *
- * 데이터만 다루는 작업이므로 스키마 동기화는 끈다.
+ * 데이터만 다루는 작업이므로 스키마 동기화와 마이그레이션은 끈다(스키마는 앱 배포 때 바뀐다).
  */
 @Module({
   imports: [
@@ -23,6 +23,7 @@ import { StationsService } from '../stations/stations.service';
       useFactory: (configService: ConfigService) => ({
         ...createTypeOrmOptions(configService),
         synchronize: false,
+        migrationsRun: false,
       }),
     }),
     StationsModule,
