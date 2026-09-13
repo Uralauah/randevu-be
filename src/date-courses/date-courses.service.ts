@@ -1,12 +1,13 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
-import { In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { User } from '../users/entities';
 import { UsersService } from '../users/users.service';
 import { StationsService } from '../stations/stations.service';
@@ -55,6 +56,9 @@ export class DateCoursesService {
     private readonly usersService: UsersService,
     private readonly stationsService: StationsService,
     private readonly dateCoursesGateway: DateCoursesGateway,
+
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   async create(userId: string, dto: CreateDateCourseDto) {
@@ -125,32 +129,46 @@ export class DateCoursesService {
     return this.toCourseResponse(course);
   }
 
+  /**
+   * 코스 날짜와 아이템 목록을 바꾼다.
+   *
+   * items는 코스의 전체 아이템 목록이라, 상대방이 방금 추가한 아이템을 모르는 채로 보낸
+   * 요청은 그 아이템을 지운다(lost update). 그래서
+   * - 요청에 version이 있으면 `WHERE version = :version`으로 확인과 증가를 한 문장에서 해,
+   *   그 사이 다른 수정이 있었다면 409로 거절한다.
+   * - 코스 행을 먼저 갱신해 행 락을 잡고, 그 뒤에 현재 아이템을 읽어 동시 수정이 섞이지 않게 한다.
+   * - 모든 쓰기를 한 트랜잭션으로 묶어, 검증에 실패하면 날짜·아이템 어느 것도 바뀌지 않는다.
+   * 소켓 알림은 커밋이 끝난 뒤에 보낸다.
+   */
   async update(courseId: string, userId: string, dto: UpdateDateCourseDto) {
     await this.assertParticipant(courseId, userId);
 
-    const course = await this.findCourseOrThrow(courseId);
     const changed = {
       date: dto.date !== undefined,
       items: dto.items !== undefined,
     };
 
-    if (dto.date !== undefined) {
-      await this.courseRepository.update(courseId, {
-        date: dto.date,
-      });
+    if (!changed.date && !changed.items) {
+      return this.findOne(courseId, userId);
     }
 
     if (dto.items !== undefined) {
-      await this.updateCourseItems(course, dto.items);
+      this.assertUniqueItemOrders(dto.items);
     }
 
-    if (changed.date || changed.items) {
-      this.dateCoursesGateway.emitCourseUpdated({
-        courseId,
-        updatedByUserId: userId,
-        changed,
-      });
-    }
+    await this.dataSource.transaction(async (manager) => {
+      await this.bumpCourseVersion(manager, courseId, dto);
+
+      if (dto.items !== undefined) {
+        await this.updateCourseItems(manager, courseId, dto.items);
+      }
+    });
+
+    this.dateCoursesGateway.emitCourseUpdated({
+      courseId,
+      updatedByUserId: userId,
+      changed,
+    });
 
     return this.findOne(courseId, userId);
   }
@@ -265,13 +283,48 @@ export class DateCoursesService {
     });
   }
 
+  private async bumpCourseVersion(
+    manager: EntityManager,
+    courseId: string,
+    dto: UpdateDateCourseDto,
+  ) {
+    const result = await manager.update(
+      DateCourse,
+      dto.version === undefined
+        ? { id: courseId }
+        : { id: courseId, version: dto.version },
+      {
+        ...(dto.date !== undefined ? { date: dto.date } : {}),
+        version: () => '"version" + 1',
+      },
+    );
+
+    if (result.affected) {
+      return;
+    }
+
+    const exists = await manager.exists(DateCourse, {
+      where: { id: courseId },
+    });
+
+    if (!exists) {
+      throw new NotFoundException('데이트 코스를 찾을 수 없습니다.');
+    }
+
+    throw new ConflictException(
+      '다른 사람이 먼저 코스를 수정했습니다. 최신 내용을 확인한 뒤 다시 시도해주세요.',
+    );
+  }
+
   private async updateCourseItems(
-    course: DateCourse,
+    manager: EntityManager,
+    courseId: string,
     itemDtos: UpdateDateCourseItemDto[],
   ) {
-    this.assertUniqueItemOrders(itemDtos);
-
-    const existingItems = course.items ?? [];
+    // 코스 행 락을 잡은 뒤에 읽으므로, 동시에 들어온 다른 수정이 끝난 결과를 기준으로 한다.
+    const existingItems = await manager.find(DateCourseItem, {
+      where: { courseId },
+    });
     const existingItemsById = new Map(
       existingItems.map((item) => [item.id, item]),
     );
@@ -297,27 +350,29 @@ export class DateCoursesService {
       }
 
       itemsToSave.push(
-        this.itemRepository.create({
+        manager.create(DateCourseItem, {
           ...this.toCreateDateCourseItemDto(itemDto),
-          courseId: course.id,
+          courseId,
         }),
       );
     }
+
+    // 검증을 모두 마친 뒤에 쓴다.
+    this.assertUniqueCoursePlaces(itemsToSave);
 
     const deletedItemIds = existingItems
       .filter((item) => !keptItemIds.has(item.id))
       .map((item) => item.id);
 
     if (deletedItemIds.length > 0) {
-      await this.itemRepository.delete({
-        courseId: course.id,
+      await manager.delete(DateCourseItem, {
+        courseId,
         id: In(deletedItemIds),
       });
     }
 
     if (itemsToSave.length > 0) {
-      this.assertUniqueCoursePlaces(itemsToSave);
-      await this.itemRepository.save(itemsToSave);
+      await manager.save(DateCourseItem, itemsToSave);
     }
   }
 
@@ -524,6 +579,7 @@ export class DateCoursesService {
       })),
       createdAt: course.createdAt,
       updatedAt: course.updatedAt,
+      version: course.version,
     };
   }
 

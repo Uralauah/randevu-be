@@ -8,6 +8,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Min,
   ValidateNested,
 } from 'class-validator';
 
@@ -144,6 +145,16 @@ export class UpdateDateCourseItemDto {
 }
 
 export class UpdateDateCourseDto {
+  /**
+   * 클라이언트가 마지막으로 읽은 코스 버전. 보내면 그 사이 다른 사람이 먼저 수정한 경우
+   * 409로 거절한다. 기존 클라이언트와의 호환을 위해 아직은 선택 값이다.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  version?: number;
+
   @IsOptional()
   @IsDateString()
   date?: string;

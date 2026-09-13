@@ -1,4 +1,5 @@
-import { Repository } from 'typeorm';
+import { BadRequestException, ConflictException } from '@nestjs/common';
+import { DataSource, Repository } from 'typeorm';
 import { SocialAccount } from '../auth/entities';
 import { User } from '../users/entities';
 import { UsersService } from '../users/users.service';
@@ -12,12 +13,16 @@ describe('DateCoursesService', () => {
   let courseRepository: MockRepository<DateCourse>;
   let itemRepository: MockRepository<DateCourseItem>;
   let participantRepository: MockRepository<DateCourseParticipant>;
-  let usersService: jest.Mocked<Pick<UsersService, 'userExists' | 'findUserWithProfile'>>;
+  let usersService: jest.Mocked<
+    Pick<UsersService, 'userExists' | 'findUserWithProfile'>
+  >;
   let stationsService: jest.Mocked<Pick<StationsService, 'stationExists'>>;
   let dateCoursesGateway: Pick<
     DateCoursesGateway,
     'emitParticipantJoined' | 'emitCourseUpdated'
   >;
+  let manager: MockEntityManager;
+  let dataSource: { transaction: jest.Mock };
 
   beforeEach(() => {
     courseRepository = mockRepository<DateCourse>();
@@ -35,13 +40,21 @@ describe('DateCoursesService', () => {
       emitCourseUpdated: jest.fn(),
     };
 
+    manager = mockEntityManager();
+    dataSource = {
+      transaction: jest.fn((work: (m: MockEntityManager) => Promise<unknown>) =>
+        work(manager),
+      ),
+    };
+
     service = new DateCoursesService(
-      courseRepository,
-      itemRepository,
-      participantRepository,
+      courseRepository as unknown as Repository<DateCourse>,
+      itemRepository as unknown as Repository<DateCourseItem>,
+      participantRepository as unknown as Repository<DateCourseParticipant>,
       usersService as unknown as UsersService,
       stationsService as unknown as StationsService,
       dateCoursesGateway as DateCoursesGateway,
+      dataSource as unknown as DataSource,
     );
   });
 
@@ -205,31 +218,24 @@ describe('DateCoursesService', () => {
   });
 
   describe('update', () => {
-    it('updates date and emits a course updated socket event', async () => {
-      const course = createCourse({
-        items: [
-          createCourseItem({
-            id: 'first',
-            itemOrder: 1,
-            name: '식당',
-            lat: 37,
-            lng: 127,
-          }),
-        ],
-      });
-
+    beforeEach(() => {
       participantRepository.findOne.mockResolvedValue(
         {} as DateCourseParticipant,
       );
-      courseRepository.findOne.mockResolvedValue(course);
+      courseRepository.findOne.mockResolvedValue(createCourse({ items: [] }));
+    });
 
+    it('updates date and emits a course updated socket event', async () => {
       await service.update('course-id', 'partner-id', {
         date: '2026-06-05',
       });
 
-      expect(courseRepository.update).toHaveBeenCalledWith('course-id', {
-        date: '2026-06-05',
-      });
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      expect(manager.update).toHaveBeenCalledWith(
+        DateCourse,
+        { id: 'course-id' },
+        { date: '2026-06-05', version: expect.any(Function) },
+      );
       expect(dateCoursesGateway.emitCourseUpdated).toHaveBeenCalledWith({
         courseId: 'course-id',
         updatedByUserId: 'partner-id',
@@ -255,14 +261,8 @@ describe('DateCoursesService', () => {
         lat: 37.001,
         lng: 127,
       });
-      const course = createCourse({
-        items: [firstItem, deletedItem],
-      });
 
-      participantRepository.findOne.mockResolvedValue(
-        {} as DateCourseParticipant,
-      );
-      courseRepository.findOne.mockResolvedValue(course);
+      manager.find.mockResolvedValue([firstItem, deletedItem]);
 
       await service.update('course-id', 'partner-id', {
         items: [
@@ -286,21 +286,12 @@ describe('DateCoursesService', () => {
         itemOrder: 2,
         name: '기존 식당',
       });
-      const deleteCriteria = itemRepository.delete.mock.calls[0]?.[0] as
-        | { courseId?: string; id?: unknown }
-        | undefined;
-
-      expect(deleteCriteria?.courseId).toBe('course-id');
-      expect(deleteCriteria?.id).toBeDefined();
-      expect(itemRepository.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          courseId: 'course-id',
-          itemOrder: 1,
-          itemType: 'CAFE',
-          name: '새 카페',
-        }),
-      );
-      expect(itemRepository.save).toHaveBeenCalledWith(
+      expect(manager.delete).toHaveBeenCalledWith(DateCourseItem, {
+        courseId: 'course-id',
+        id: expect.anything(),
+      });
+      expect(manager.save).toHaveBeenCalledWith(
+        DateCourseItem,
         expect.arrayContaining([
           firstItem,
           expect.objectContaining({
@@ -319,6 +310,66 @@ describe('DateCoursesService', () => {
           items: true,
         },
       });
+    });
+
+    it('읽은 버전과 현재 버전이 다르면 409를 던지고 아이템을 건드리지 않는다', async () => {
+      manager.update.mockResolvedValue({ affected: 0 });
+      manager.exists.mockResolvedValue(true);
+
+      await expect(
+        service.update('course-id', 'partner-id', {
+          version: 3,
+          items: [{ itemOrder: 1, itemType: 'CAFE', name: '새 카페' }],
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(manager.update).toHaveBeenCalledWith(
+        DateCourse,
+        { id: 'course-id', version: 3 },
+        { version: expect.any(Function) },
+      );
+      expect(manager.find).not.toHaveBeenCalled();
+      expect(manager.delete).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(dateCoursesGateway.emitCourseUpdated).not.toHaveBeenCalled();
+    });
+
+    it('중복 장소 검증에 실패하면 기존 아이템을 지우기 전에 거절한다', async () => {
+      manager.find.mockResolvedValue([
+        createCourseItem({
+          id: 'first',
+          itemOrder: 1,
+          name: '성수 팝업',
+          lat: 37,
+          lng: 127,
+        }),
+        createCourseItem({
+          id: 'second',
+          itemOrder: 2,
+          name: '카페',
+          lat: 37.001,
+          lng: 127,
+        }),
+      ]);
+
+      await expect(
+        service.update('course-id', 'partner-id', {
+          items: [
+            { id: 'first', itemOrder: 1 },
+            { itemOrder: 2, itemType: 'ACTIVITY', name: '성수 팝업' },
+          ],
+        }),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(manager.delete).not.toHaveBeenCalled();
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(dateCoursesGateway.emitCourseUpdated).not.toHaveBeenCalled();
+    });
+
+    it('응답에 현재 버전을 담는다', () => {
+      const response = callToCourseResponse(service, { version: 4 });
+
+      expect(response).toMatchObject({ version: 4 });
     });
   });
 
@@ -352,7 +403,7 @@ describe('DateCoursesService', () => {
           participants: [participant],
           createdAt: new Date('2026-06-04T00:00:00.000Z'),
           updatedAt: new Date('2026-06-04T00:00:00.000Z'),
-        } as DateCourse);
+        } as unknown as DateCourse);
       participantRepository.findOne.mockResolvedValueOnce(null);
       participantRepository.save.mockResolvedValueOnce(participant);
       participantRepository.findOne.mockResolvedValueOnce(participant);
@@ -392,6 +443,7 @@ function callToCourseResponse(
           role: 'OWNER' | 'PARTNER';
           joinedAt: Date;
         }>;
+        version: number;
       };
     }
   ).toCourseResponse({
@@ -406,6 +458,7 @@ function callToCourseResponse(
     participants: [],
     createdAt: new Date('2026-06-04T00:00:00.000Z'),
     updatedAt: new Date('2026-06-04T00:00:00.000Z'),
+    version: 1,
     ...course,
   } as DateCourse);
 }
@@ -424,7 +477,8 @@ function createCourse(params: { items: DateCourseItem[] }) {
     participants: [],
     createdAt: new Date('2026-06-04T00:00:00.000Z'),
     updatedAt: new Date('2026-06-04T00:00:00.000Z'),
-  } as DateCourse;
+    version: 1,
+  } as unknown as DateCourse;
 }
 
 function createCourseItem(params: {
@@ -507,4 +561,19 @@ function mockRepository<T extends object>() {
     save: jest.fn((entity: T) => entity),
     update: jest.fn(),
   } as unknown as MockRepository<T>;
+}
+
+type MockEntityManager = {
+  [K in 'update' | 'exists' | 'find' | 'delete' | 'save' | 'create']: jest.Mock;
+};
+
+function mockEntityManager(): MockEntityManager {
+  return {
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
+    exists: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
+    delete: jest.fn(),
+    save: jest.fn((_target: unknown, entities: unknown) => entities),
+    create: jest.fn((_target: unknown, entity: unknown) => entity),
+  };
 }

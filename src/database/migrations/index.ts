@@ -1,3 +1,5 @@
+import { AddDateCourseVersion1757763600000 } from './1757763600000-add-date-course-version';
+
 /**
  * 앱 시작 시 적용할 마이그레이션 목록(오래된 순).
  *
@@ -9,4 +11,6 @@
  *   - 로컬 DB는 synchronize로 이미 바뀌어 있을 수 있으므로 IF NOT EXISTS처럼
  *     여러 번 실행해도 같은 결과가 나오게 작성한다.
  */
-export const MIGRATIONS: (new () => unknown)[] = [];
+export const MIGRATIONS: (new () => unknown)[] = [
+  AddDateCourseVersion1757763600000,
+];

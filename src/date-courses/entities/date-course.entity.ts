@@ -8,6 +8,7 @@ import {
   OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
+  VersionColumn,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
 import { SubwayStation } from '../../stations/entities';
@@ -52,6 +53,13 @@ export class DateCourse {
 
   @UpdateDateColumn({ name: 'updated_at', type: 'timestamptz' })
   updatedAt!: Date;
+
+  /**
+   * 코스(날짜·아이템)가 바뀔 때마다 1씩 올라간다. 수정 요청이 읽었던 버전을 함께 보내면
+   * 그 사이 다른 사람이 먼저 고쳤는지 알 수 있다.
+   */
+  @VersionColumn({ default: 1 })
+  version!: number;
 
   @ManyToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'owner_user_id' })
