@@ -391,42 +391,47 @@ describe('DateCoursesService', () => {
   });
 
   describe('acceptInvite', () => {
+    const course = {
+      id: 'course-id',
+      ownerUserId: 'owner-id',
+      inviteToken: 'invite-token',
+      inviteExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
+    } as DateCourse;
+    const ownerParticipant = {
+      courseId: course.id,
+      userId: 'owner-id',
+      role: 'OWNER',
+    } as DateCourseParticipant;
+
+    beforeEach(() => {
+      usersService.findUserWithProfile.mockResolvedValue(
+        createUser({ id: 'partner-id', nickname: '민지', platform: 'KAKAO' }),
+      );
+      manager.findOne.mockResolvedValue(course);
+      // findOne(courseId, userId)로 최종 응답을 만들 때 쓰는 조회
+      participantRepository.findOne.mockResolvedValue(
+        {} as DateCourseParticipant,
+      );
+      courseRepository.findOne.mockResolvedValue(createCourse({ items: [] }));
+    });
+
     it('emits a socket event when a new participant joins', async () => {
-      const course = {
-        id: 'course-id',
-        ownerUserId: 'owner-id',
-        inviteToken: 'invite-token',
-        inviteExpiresAt: new Date('2099-01-01T00:00:00.000Z'),
-      } as DateCourse;
       const participant = {
         courseId: course.id,
         userId: 'partner-id',
         role: 'PARTNER',
         createdAt: new Date('2026-06-04T00:00:00.000Z'),
       } as DateCourseParticipant;
-      const joiningUser = createUser({
-        id: 'partner-id',
-        nickname: '민지',
-        platform: 'KAKAO',
-      });
 
-      usersService.findUserWithProfile.mockResolvedValueOnce(joiningUser);
-      courseRepository.findOne
-        .mockResolvedValueOnce(course)
-        .mockResolvedValueOnce({
-          ...course,
-          station: null,
-          items: [],
-          participants: [participant],
-          createdAt: new Date('2026-06-04T00:00:00.000Z'),
-          updatedAt: new Date('2026-06-04T00:00:00.000Z'),
-        } as unknown as DateCourse);
-      participantRepository.findOne.mockResolvedValueOnce(null);
-      participantRepository.save.mockResolvedValueOnce(participant);
-      participantRepository.findOne.mockResolvedValueOnce(participant);
+      manager.find.mockResolvedValue([ownerParticipant]);
+      manager.save.mockResolvedValueOnce(participant);
 
       await service.acceptInvite('invite-token', 'partner-id');
 
+      expect(manager.findOne).toHaveBeenCalledWith(DateCourse, {
+        where: { inviteToken: 'invite-token' },
+        lock: { mode: 'pessimistic_write' },
+      });
       expect(dateCoursesGateway.emitParticipantJoined).toHaveBeenCalledWith({
         courseId: course.id,
         participant: {
@@ -437,6 +442,34 @@ describe('DateCoursesService', () => {
           joinedAt: participant.createdAt,
         },
       });
+    });
+
+    it('이미 파트너가 있는 코스에는 다른 사람이 참여할 수 없다', async () => {
+      manager.find.mockResolvedValue([
+        ownerParticipant,
+        { courseId: course.id, userId: 'partner-id', role: 'PARTNER' },
+      ]);
+
+      await expect(
+        service.acceptInvite('invite-token', 'stranger-id'),
+      ).rejects.toThrow(ConflictException);
+
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(dateCoursesGateway.emitParticipantJoined).not.toHaveBeenCalled();
+    });
+
+    it('이미 참여한 사람이 링크를 다시 열면 그대로 코스를 돌려준다', async () => {
+      manager.find.mockResolvedValue([
+        ownerParticipant,
+        { courseId: course.id, userId: 'partner-id', role: 'PARTNER' },
+      ]);
+
+      await expect(
+        service.acceptInvite('invite-token', 'partner-id'),
+      ).resolves.toMatchObject({ id: 'course-id' });
+
+      expect(manager.save).not.toHaveBeenCalled();
+      expect(dateCoursesGateway.emitParticipantJoined).not.toHaveBeenCalled();
     });
   });
 });
@@ -581,7 +614,14 @@ function mockRepository<T extends object>() {
 }
 
 type MockEntityManager = {
-  [K in 'update' | 'exists' | 'find' | 'delete' | 'save' | 'create']: jest.Mock;
+  [K in
+    | 'update'
+    | 'exists'
+    | 'find'
+    | 'findOne'
+    | 'delete'
+    | 'save'
+    | 'create']: jest.Mock;
 };
 
 function mockEntityManager(): MockEntityManager {
@@ -589,6 +629,7 @@ function mockEntityManager(): MockEntityManager {
     update: jest.fn().mockResolvedValue({ affected: 1 }),
     exists: jest.fn(),
     find: jest.fn().mockResolvedValue([]),
+    findOne: jest.fn(),
     delete: jest.fn(),
     save: jest.fn((_target: unknown, entities: unknown) => entities),
     create: jest.fn((_target: unknown, entity: unknown) => entity),

@@ -24,6 +24,8 @@ import { DateCoursesGateway } from './date-courses.gateway';
 const EARTH_RADIUS_METERS = 6_371_000;
 const WALKING_ROUTE_DISTANCE_FACTOR = 1.25;
 const WALKING_SPEED_METERS_PER_MINUTE = 67;
+/** 커플 코스이므로 코스 주인 외에 참여할 수 있는 사람은 한 명이다. */
+const MAX_PARTNERS_PER_COURSE = 1;
 
 interface WalkingSegmentItem {
   id: string | null;
@@ -226,48 +228,75 @@ export class DateCoursesService {
     };
   }
 
+  /**
+   * 초대 링크로 코스에 참여한다.
+   *
+   * 커플 코스이므로 PARTNER는 한 명만 받는다. 링크가 퍼져도 파트너가 들어온 뒤에는 다른 사람이
+   * 참여할 수 없고, 이미 참여한 사람이 링크를 다시 열면 참여 상태 그대로 코스를 돌려준다.
+   * 두 사람이 동시에 수락해도 한 명만 들어가도록 코스 행을 잠근 채 확인하고 추가한다.
+   */
   async acceptInvite(inviteToken: string, userId: string) {
     const joiningUser = await this.findUserProfileOrThrow(userId);
 
-    const course = await this.courseRepository.findOne({
-      where: { inviteToken },
-    });
+    const { courseId, joinedParticipant } = await this.dataSource.transaction(
+      async (manager) => {
+        const course = await manager.findOne(DateCourse, {
+          where: { inviteToken },
+          lock: { mode: 'pessimistic_write' },
+        });
 
-    if (!course) {
-      throw new NotFoundException('초대 링크를 찾을 수 없습니다.');
-    }
+        if (!course) {
+          throw new NotFoundException('초대 링크를 찾을 수 없습니다.');
+        }
 
-    if (course.inviteExpiresAt && course.inviteExpiresAt < new Date()) {
-      throw new ForbiddenException('만료된 초대 링크입니다.');
-    }
+        if (course.inviteExpiresAt && course.inviteExpiresAt < new Date()) {
+          throw new ForbiddenException('만료된 초대 링크입니다.');
+        }
 
-    const existingParticipant = await this.participantRepository.findOne({
-      where: {
-        courseId: course.id,
-        userId,
+        const participants = await manager.find(DateCourseParticipant, {
+          where: { courseId: course.id },
+        });
+
+        if (participants.some((participant) => participant.userId === userId)) {
+          return { courseId: course.id, joinedParticipant: null };
+        }
+
+        const role = course.ownerUserId === userId ? 'OWNER' : 'PARTNER';
+        const partnerCount = participants.filter(
+          (participant) => participant.role === 'PARTNER',
+        ).length;
+
+        if (role === 'PARTNER' && partnerCount >= MAX_PARTNERS_PER_COURSE) {
+          throw new ConflictException('이미 다른 사람이 참여한 코스입니다.');
+        }
+
+        const participant = await manager.save(
+          DateCourseParticipant,
+          manager.create(DateCourseParticipant, {
+            courseId: course.id,
+            userId,
+            role,
+          }),
+        );
+
+        return { courseId: course.id, joinedParticipant: participant };
       },
-    });
+    );
 
-    if (!existingParticipant) {
-      const participant = await this.participantRepository.save({
-        courseId: course.id,
-        userId,
-        role: course.ownerUserId === userId ? 'OWNER' : 'PARTNER',
-      });
-
+    if (joinedParticipant) {
       this.dateCoursesGateway.emitParticipantJoined({
-        courseId: course.id,
+        courseId,
         participant: {
-          userId: participant.userId,
+          userId: joinedParticipant.userId,
           nickname: joiningUser.nickname,
           platform: this.getUserPlatform(joiningUser),
-          role: participant.role,
-          joinedAt: participant.createdAt,
+          role: joinedParticipant.role,
+          joinedAt: joinedParticipant.createdAt,
         },
       });
     }
 
-    return this.findOne(course.id, userId);
+    return this.findOne(courseId, userId);
   }
 
   private createItemEntity(dto: CreateDateCourseItemDto) {
