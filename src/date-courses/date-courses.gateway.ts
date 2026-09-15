@@ -9,9 +9,12 @@ import {
   WebSocketServer,
   WsException,
 } from '@nestjs/websockets';
+import { isUUID } from 'class-validator';
+import { IncomingMessage } from 'http';
 import { DefaultEventsMap, Server, Socket } from 'socket.io';
 import { Repository } from 'typeorm';
 import { AuthTokenService } from '../auth/auth-token.service';
+import { isAllowedOrigin } from '../common/cors';
 import { DateCourseParticipant } from './entities';
 
 interface DateCourseSocketData {
@@ -50,12 +53,27 @@ export interface DateCourseUpdatedPayload {
   };
 }
 
+export interface DateCourseDeletedPayload {
+  courseId: string;
+  deletedByUserId: string;
+}
+
 @WebSocketGateway({
   namespace: 'date-courses',
+  // REST와 같은 출처 허용 목록을 쓴다(폴링 전송의 HTTP 요청에 적용).
   cors: {
-    origin: true,
+    origin: (
+      origin: string | undefined,
+      callback: (error: Error | null, allow?: boolean) => void,
+    ) => callback(null, isAllowedOrigin(origin)),
     credentials: true,
   },
+  // 브라우저는 WebSocket 연결에 CORS를 적용하지 않고, 위 cors 설정도 헤더만 붙일 뿐
+  // 거절하지 않는다. 그래서 업그레이드 요청의 Origin은 여기서 직접 확인한다.
+  allowRequest: (
+    request: IncomingMessage,
+    callback: (error: string | null | undefined, success: boolean) => void,
+  ) => callback(null, isAllowedOrigin(request.headers.origin)),
 })
 export class DateCoursesGateway implements OnGatewayConnection {
   @WebSocketServer()
@@ -166,6 +184,29 @@ export class DateCoursesGateway implements OnGatewayConnection {
       });
   }
 
+  /**
+   * 코스가 삭제되면 알린 뒤, 그 방에 남아 있는 연결을 모두 내보낸다.
+   * 그대로 두면 같은 ID로 오는 이벤트를 계속 받을 수 있는 방이 남는다.
+   */
+  emitCourseDeleted(payload: DateCourseDeletedPayload) {
+    if (!this.server) {
+      this.logger.warn(
+        `Socket server is not ready. Skipped course:deleted for courseId=${payload.courseId}`,
+      );
+      return;
+    }
+
+    const room = this.getCourseRoom(payload.courseId);
+
+    this.server.to(room).emit('course:deleted', {
+      type: 'COURSE_DELETED',
+      courseId: payload.courseId,
+      deletedByUserId: payload.deletedByUserId,
+      emittedAt: new Date().toISOString(),
+    });
+    this.server.in(room).socketsLeave(room);
+  }
+
   emitCourseUpdated(payload: DateCourseUpdatedPayload) {
     if (!this.server) {
       this.logger.warn(
@@ -186,10 +227,13 @@ export class DateCoursesGateway implements OnGatewayConnection {
       });
   }
 
+  /**
+   * 토큰은 handshake auth(브라우저) 또는 Authorization 헤더(앱·서버)로만 받는다.
+   * 쿼리스트링으로 받으면 URL과 함께 프록시·로드밸런서 접근 로그에 남을 수 있다.
+   */
   private extractToken(client: DateCourseSocket) {
     const auth = client.handshake.auth as Record<string, unknown> | undefined;
     const authToken = auth?.token;
-    const queryToken = client.handshake.query?.accessToken;
     const authorization = client.handshake.headers.authorization as
       | string
       | string[]
@@ -197,10 +241,6 @@ export class DateCoursesGateway implements OnGatewayConnection {
 
     if (typeof authToken === 'string' && authToken.trim()) {
       return this.stripBearerPrefix(authToken);
-    }
-
-    if (typeof queryToken === 'string' && queryToken.trim()) {
-      return this.stripBearerPrefix(queryToken);
     }
 
     if (Array.isArray(authorization)) {
@@ -235,6 +275,11 @@ export class DateCoursesGateway implements OnGatewayConnection {
 
     if (!courseId) {
       throw new WsException('courseId가 필요합니다.');
+    }
+
+    // 형식이 틀린 값을 그대로 uuid 컬럼 조회에 넘기면 DB 오류가 난다.
+    if (!isUUID(courseId)) {
+      throw new WsException('courseId 형식이 올바르지 않습니다.');
     }
 
     return courseId;

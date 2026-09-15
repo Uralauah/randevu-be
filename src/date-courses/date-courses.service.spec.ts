@@ -19,7 +19,7 @@ describe('DateCoursesService', () => {
   let stationsService: jest.Mocked<Pick<StationsService, 'stationExists'>>;
   let dateCoursesGateway: Pick<
     DateCoursesGateway,
-    'emitParticipantJoined' | 'emitCourseUpdated'
+    'emitParticipantJoined' | 'emitCourseUpdated' | 'emitCourseDeleted'
   >;
   let manager: MockEntityManager;
   let dataSource: { transaction: jest.Mock };
@@ -38,6 +38,7 @@ describe('DateCoursesService', () => {
     dateCoursesGateway = {
       emitParticipantJoined: jest.fn(),
       emitCourseUpdated: jest.fn(),
+      emitCourseDeleted: jest.fn(),
     };
 
     manager = mockEntityManager();
@@ -370,6 +371,22 @@ describe('DateCoursesService', () => {
       const response = callToCourseResponse(service, { version: 4 });
 
       expect(response).toMatchObject({ version: 4 });
+    });
+  });
+
+  describe('remove', () => {
+    it('코스를 지운 뒤 소켓 방에 삭제를 알린다', async () => {
+      courseRepository.findOne.mockResolvedValue(createCourse({ items: [] }));
+
+      await expect(service.remove('course-id', 'owner-id')).resolves.toEqual({
+        deleted: true,
+      });
+
+      expect(courseRepository.delete).toHaveBeenCalledWith('course-id');
+      expect(dateCoursesGateway.emitCourseDeleted).toHaveBeenCalledWith({
+        courseId: 'course-id',
+        deletedByUserId: 'owner-id',
+      });
     });
   });
 

@@ -196,6 +196,11 @@ export class DateCoursesService {
 
     await this.courseRepository.delete(courseId);
 
+    this.dateCoursesGateway.emitCourseDeleted({
+      courseId,
+      deletedByUserId: userId,
+    });
+
     return { deleted: true };
   }
 
