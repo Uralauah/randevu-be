@@ -40,13 +40,10 @@ export class PlacesController {
   searchPlaces(
     @Query('query') query: string,
     @Query('type') type: PlaceType,
-    @Query('stationId') stationId?: string,
+    @Query('stationId', new ParseIntPipe({ optional: true }))
+    stationId?: number,
   ) {
-    return this.placesService.searchPlacesByKeyword(
-      query,
-      type,
-      stationId ? Number(stationId) : undefined,
-    );
+    return this.placesService.searchPlacesByKeyword(query, type, stationId);
   }
 
   @Get('places/:placeKey')

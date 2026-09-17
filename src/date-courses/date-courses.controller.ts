@@ -4,6 +4,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseUUIDPipe,
   Patch,
   Post,
   UseGuards,
@@ -34,7 +35,10 @@ export class DateCoursesController {
   }
 
   @Get(':id')
-  findOne(@CurrentUser() user: CurrentUser, @Param('id') id: string) {
+  findOne(
+    @CurrentUser() user: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.dateCoursesService.findOne(id, user.id);
   }
 
@@ -47,19 +51,25 @@ export class DateCoursesController {
   @Patch(':id')
   update(
     @CurrentUser() user: CurrentUser,
-    @Param('id') id: string,
+    @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDateCourseDto,
   ) {
     return this.dateCoursesService.update(id, user.id, dto);
   }
 
   @Delete(':id')
-  remove(@CurrentUser() user: CurrentUser, @Param('id') id: string) {
+  remove(
+    @CurrentUser() user: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.dateCoursesService.remove(id, user.id);
   }
 
   @Post(':id/invite')
-  createInvite(@CurrentUser() user: CurrentUser, @Param('id') id: string) {
+  createInvite(
+    @CurrentUser() user: CurrentUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
     return this.dateCoursesService.createInvite(id, user.id);
   }
 
