@@ -304,8 +304,11 @@ export class PlacesService {
       this.parseCommaSeparated(excludedPlaceKeys),
     );
 
-    // 팝업·이벤트는 월 단위로 운영되므로 역+월로 캐시해 hit rate를 높인다.
-    const cacheKey = `rec:${stationId}:${dateContext.year}-${dateContext.month}`;
+    // 후보 검색어(예: "9월 20일 성수 팝업"), 날짜 근거 매칭, 주말·정확한 날짜 가산점이 모두
+    // 날짜에 따라 달라지므로 날짜 단위로 캐시한다. 월 단위로 묶으면 같은 달의 다른 날짜 요청에
+    // 첫 요청 날짜 기준으로 고른 추천이 나간다. 월 단위 검색어 결과는 네이버 클라이언트의
+    // 검색어 캐시가 날짜 사이에서 재사용한다.
+    const cacheKey = `rec:${stationId}:${dateContext.date}`;
     const sortedCandidates = await this.recommendationCache.getOrLoad(
       cacheKey,
       () => this.buildRecommendationCandidates(station, dateContext),

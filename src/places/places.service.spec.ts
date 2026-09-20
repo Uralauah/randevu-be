@@ -725,6 +725,35 @@ describe('PlacesService', () => {
     expect(new Set(results.map((result) => result.places)).size).toBe(1);
   });
 
+  it('같은 달이라도 날짜가 다르면 그 날짜 기준으로 다시 추천한다', async () => {
+    stationRepository.findOne.mockResolvedValue({
+      id: 41,
+      name: '성수',
+      lat: 37.5446,
+      lng: 127.0558,
+      region: { name: '서울' },
+    });
+    naverLocalClient.searchLocal.mockResolvedValue([
+      createNaverLocalItem({
+        id: 4101,
+        title: '성수 팝업스토어',
+        lat: 37.5447,
+        lng: 127.0559,
+        category: '문화,예술 > 전시',
+        description: '기간한정 팝업',
+      }),
+    ]);
+
+    await service.recommendPlaceByStationAndDate(41, '2026-09-19');
+    naverLocalClient.searchLocal.mockClear();
+
+    await service.recommendPlaceByStationAndDate(41, '2026-09-23');
+
+    expect(naverLocalClient.searchLocal).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.stringContaining('9월 23일') }),
+    );
+  });
+
   describe('findPlaceDetail', () => {
     const storedPlace = (placeKey: string) =>
       ({
