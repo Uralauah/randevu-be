@@ -61,6 +61,10 @@ export class TtlLruCache<K, V> {
     }
   }
 
+  delete(key: K) {
+    this.entries.delete(key);
+  }
+
   async getOrLoad(key: K, load: () => Promise<V>): Promise<V> {
     const cached = this.get(key);
 

@@ -3,6 +3,11 @@ import { CreateRandomSubwayDto } from './dto/create-random-subway.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TravelTimeCache } from '../stations/entities';
+import {
+  CatalogStation,
+  StationCatalog,
+  StationCatalogService,
+} from '../stations/station-catalog.service';
 
 const WEIGHT_BY_GRADE: Record<string, number> = {
   A: 100,
@@ -11,6 +16,16 @@ const WEIGHT_BY_GRADE: Record<string, number> = {
   D: 10,
 };
 
+interface ReachableStationRow {
+  arrivalStationId: number;
+  minTravelMinutes: number;
+}
+
+interface Candidate {
+  station: CatalogStation;
+  minTravelMinutes: number;
+}
+
 @Injectable()
 export class RandomService {
   private readonly logger = new Logger(RandomService.name);
@@ -18,16 +33,20 @@ export class RandomService {
   constructor(
     @InjectRepository(TravelTimeCache)
     private readonly travelTimeCacheRepository: Repository<TravelTimeCache>,
+
+    private readonly stationCatalog: StationCatalogService,
   ) {}
 
   async createSubwayRandom(dto: CreateRandomSubwayDto) {
-    this.logger.log(`랜덤 요청: ${JSON.stringify(dto)}`);
-    const reachableStations = await this.findReachableStations(dto);
+    const catalog = await this.stationCatalog.getCatalog();
+    const reachableStations = catalog.byId.has(dto.departureStationId)
+      ? await this.findReachableStations(dto)
+      : [];
+    const candidates = this.filterCandidates(reachableStations, dto, catalog);
 
-    this.logger.log(`도달 가능한 역 개수: ${reachableStations.length}`);
-    const candidates = this.filterCandidates(reachableStations, dto);
-
-    this.logger.log(`필터링 후 후보 역 개수: ${candidates.length}`);
+    this.logger.debug(
+      `랜덤 요청: departureStationId=${dto.departureStationId}, maxMinutes=${dto.maxMinutes}, reachable=${reachableStations.length}, candidates=${candidates.length}`,
+    );
 
     if (candidates.length == 0) {
       this.logger.warn(
@@ -36,86 +55,93 @@ export class RandomService {
       throw new BadRequestException('조건에 맞는 역이 없습니다.');
     }
 
-    this.logger.debug(
-      `후보 역 목록: ${candidates
-        .map(
-          (item) =>
-            `${item.arrivalStation.name}(${item.minTravelMinutes}분/${item.arrivalStation.weightGrade})`,
-        )
-        .join(', ')}`,
-    );
-
     const picked = this.pickWeightedStation(candidates);
-
-    // const randomResult = await this.randomResultRepository.save({
-    //     userId: null,
-    // })
 
     return {
       randomResultId: null,
       resultStation: {
-        id: picked.arrivalStation.id,
-        name: picked.arrivalStation.name,
-        lat: picked.arrivalStation.lat,
-        lng: picked.arrivalStation.lng,
-        weightGrade: picked.arrivalStation.weightGrade,
-        placeCount: picked.arrivalStation.placeCount,
+        id: picked.station.id,
+        name: picked.station.name,
+        lat: picked.station.lat,
+        lng: picked.station.lng,
+        weightGrade: picked.station.weightGrade,
+        placeCount: picked.station.placeCount,
         travelMinutes: picked.minTravelMinutes,
-        vibeText: picked.arrivalStation.vibeText,
-        lines: picked.arrivalStation.stationLines.map((stationLine) => ({
-          id: stationLine.line.id,
-          name: stationLine.line.name,
-          color: stationLine.line.color,
+        vibeText: picked.station.vibeText,
+        lines: picked.station.lines.map((line) => ({
+          id: line.id,
+          name: line.name,
+          color: line.color,
         })),
       },
     };
   }
 
-  private findReachableStations(dto: CreateRandomSubwayDto) {
+  /**
+   * 후보를 고르는 데는 도착역 ID와 이동시간만 있으면 된다. (출발역, 이동시간) 인덱스 범위 조회로
+   * 정수 두 개만 읽고, 역 이름·노선 같은 메타데이터는 메모리 카탈로그에서 붙인다.
+   * 예전에는 후보 수백 개를 역·노선과 조인해 엔티티로 만든 뒤 하나만 썼다.
+   */
+  private findReachableStations(
+    dto: CreateRandomSubwayDto,
+  ): Promise<ReachableStationRow[]> {
     return this.travelTimeCacheRepository
       .createQueryBuilder('cache')
-      .innerJoin('cache.departureStation', 'departureStation')
-      .innerJoinAndSelect('cache.arrivalStation', 'station')
-      .leftJoinAndSelect('station.stationLines', 'stationLine')
-      .leftJoinAndSelect('stationLine.line', 'line')
+      .select('cache.arrivalStationId', 'arrivalStationId')
+      .addSelect('cache.minTravelMinutes', 'minTravelMinutes')
       .where('cache.departureStationId = :departureStationId', {
         departureStationId: dto.departureStationId,
       })
       .andWhere('cache.minTravelMinutes <= :maxMinutes', {
         maxMinutes: dto.maxMinutes,
       })
-      .andWhere('station.regionId = departureStation.regionId')
-      .getMany();
+      .getRawMany<ReachableStationRow>();
   }
 
   private filterCandidates(
-    reachableStations: TravelTimeCache[],
+    reachableStations: ReachableStationRow[],
     dto: CreateRandomSubwayDto,
-  ) {
+    catalog: StationCatalog,
+  ): Candidate[] {
+    const departureStation = catalog.byId.get(dto.departureStationId);
     const excludeStationIds = new Set(dto.excludeStationIds ?? []);
+    const candidates: Candidate[] = [];
 
-    return reachableStations.filter((item) => {
-      if (item.arrivalStationId === dto.departureStationId) {
-        return false;
+    if (!departureStation) {
+      return candidates;
+    }
+
+    for (const row of reachableStations) {
+      if (row.arrivalStationId === dto.departureStationId) {
+        continue;
       }
 
-      if (excludeStationIds.has(item.arrivalStationId)) {
-        return false;
+      if (excludeStationIds.has(row.arrivalStationId)) {
+        continue;
       }
 
-      return true;
-    });
+      const station = catalog.byId.get(row.arrivalStationId);
+
+      // 다른 지역 노선망의 역은 추천하지 않는다.
+      if (!station || station.regionId !== departureStation.regionId) {
+        continue;
+      }
+
+      candidates.push({ station, minTravelMinutes: row.minTravelMinutes });
+    }
+
+    return candidates;
   }
 
-  private pickWeightedStation(candidates: TravelTimeCache[]) {
+  private pickWeightedStation(candidates: Candidate[]) {
     const totalWeight = candidates.reduce((sum, item) => {
-      return sum + this.getStationWeight(item.arrivalStation.weightGrade);
+      return sum + this.getStationWeight(item.station.weightGrade);
     }, 0);
 
     let random = Math.random() * totalWeight;
 
     for (const item of candidates) {
-      random -= this.getStationWeight(item.arrivalStation.weightGrade);
+      random -= this.getStationWeight(item.station.weightGrade);
 
       if (random <= 0) return item;
     }
