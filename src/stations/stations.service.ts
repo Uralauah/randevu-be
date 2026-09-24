@@ -17,6 +17,7 @@ import {
   ShortestTravelTimeSolver,
   UNREACHABLE,
 } from './travel-time-graph';
+import { StationCatalogService } from './station-catalog.service';
 
 /**
  * 한 번의 INSERT에 담을 행 수. 행을 열별 배열 3개로 넘겨 unnest()로 펼치므로
@@ -55,6 +56,8 @@ export class StationsService {
 
     @InjectDataSource()
     private readonly dataSource: DataSource,
+
+    private readonly stationCatalog: StationCatalogService,
   ) {}
 
   async findRegions() {
@@ -71,49 +74,18 @@ export class StationsService {
     }));
   }
 
+  /**
+   * 앱에 들어올 때마다 불리는 API라, 요청마다 DB에서 역·노선을 조인하지 않고
+   * 메모리 카탈로그에 만들어 둔 응답을 그대로 돌려준다.
+   */
   async findAll(regionCode?: string) {
-    const where: FindOptionsWhere<SubwayStation> | undefined = regionCode
-      ? {
-          region: {
-            code: regionCode.toUpperCase(),
-          },
-        }
-      : undefined;
+    const catalog = await this.stationCatalog.getCatalog();
 
-    const stations = await this.stationRepository.find({
-      where,
-      relations: {
-        region: true,
-        stationLines: {
-          line: true,
-        },
-      },
-      order: {
-        id: 'ASC',
-      },
-    });
+    if (!regionCode) {
+      return catalog.listItems;
+    }
 
-    return stations.map((station) => ({
-      id: station.id,
-      name: station.name,
-      lat: station.lat,
-      lng: station.lng,
-      weightGrade: station.weightGrade,
-      placeCount: station.placeCount,
-      region: station.region
-        ? {
-            id: station.region.id,
-            name: station.region.name,
-            code: station.region.code,
-          }
-        : null,
-      lines: station.stationLines.map((stationLine) => ({
-        id: stationLine.line.id,
-        name: stationLine.line.name,
-        color: stationLine.line.color,
-        regionId: stationLine.line.regionId,
-      })),
-    }));
+    return catalog.listItemsByRegionCode.get(regionCode.toUpperCase()) ?? [];
   }
 
   async stationExists(stationId: number): Promise<boolean> {
@@ -236,6 +208,9 @@ export class StationsService {
 
       return insertedCount;
     });
+
+    // 역·노선 데이터를 반영한 뒤 재생성하는 흐름이므로 역 메타데이터도 다시 읽게 한다.
+    this.stationCatalog.invalidate();
 
     this.logger.log(`이동시간 캐시 재생성 완료: rows=${cacheCount}`);
 

@@ -3,6 +3,7 @@ import { Test } from '@nestjs/testing';
 import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { StationsService } from './stations.service';
 import { Region, SubwayEdge, SubwayStation, SubwayTransfer } from './entities';
+import { StationCatalogService } from './station-catalog.service';
 
 /**
  * 테스트용 노선도
@@ -99,6 +100,7 @@ describe('StationsService - 이동시간 캐시 재생성', () => {
         work(manager),
       ),
     };
+    const stationCatalog = { invalidate: jest.fn() };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -124,6 +126,7 @@ describe('StationsService - 이동시간 캐시 재생성', () => {
           },
         },
         { provide: getDataSourceToken(), useValue: dataSource },
+        { provide: StationCatalogService, useValue: stationCatalog },
       ],
     }).compile();
 
@@ -133,6 +136,7 @@ describe('StationsService - 이동시간 캐시 재생성', () => {
       executedSql,
       deleteParams,
       dataSource,
+      stationCatalog,
     };
   };
 
@@ -258,6 +262,18 @@ describe('StationsService - 이동시간 캐시 재생성', () => {
     ).toBe(true);
     expect(executedSql.at(-1)).toBe('ANALYZE travel_time_cache');
     expect(executedSql.some((sql) => sql.includes('TRUNCATE'))).toBe(false);
+  });
+
+  it('재생성이 끝나면 역 카탈로그를 무효화한다', async () => {
+    const { service, stationCatalog } = await createService({
+      stations: buildStations(),
+      edges: buildEdges(),
+      transfers: buildTransfers(5),
+    });
+
+    await service.rebuildTravelTimeCache();
+
+    expect(stationCatalog.invalidate).toHaveBeenCalledTimes(1);
   });
 
   it('이미 재생성 중이면 409를 던지고 캐시를 건드리지 않는다', async () => {

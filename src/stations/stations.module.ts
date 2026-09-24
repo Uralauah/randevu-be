@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { StationsController } from './stations.controller';
 import { StationsService } from './stations.service';
+import { StationCatalogService } from './station-catalog.service';
 import {
   Region,
   SubwayLine,
@@ -25,7 +26,7 @@ import {
     ]),
   ],
   controllers: [StationsController],
-  providers: [StationsService],
-  exports: [StationsService],
+  providers: [StationsService, StationCatalogService],
+  exports: [StationsService, StationCatalogService],
 })
 export class StationsModule {}
