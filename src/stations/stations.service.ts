@@ -75,17 +75,11 @@ export class StationsService {
   }
 
   /**
-   * 앱에 들어올 때마다 불리는 API라, 요청마다 DB에서 역·노선을 조인하지 않고
-   * 메모리 카탈로그에 만들어 둔 응답을 그대로 돌려준다.
+   * 앱에 들어올 때마다 불리는 API라, 요청마다 DB에서 역·노선을 조인해 직렬화하지 않고
+   * 메모리 카탈로그에 만들어 둔 응답 본문(직렬화·압축 완료)을 그대로 돌려준다.
    */
-  async findAll(regionCode?: string) {
-    const catalog = await this.stationCatalog.getCatalog();
-
-    if (!regionCode) {
-      return catalog.listItems;
-    }
-
-    return catalog.listItemsByRegionCode.get(regionCode.toUpperCase()) ?? [];
+  getStationListPayload(regionCode?: string) {
+    return this.stationCatalog.getStationListPayload(regionCode);
   }
 
   async stationExists(stationId: number): Promise<boolean> {
