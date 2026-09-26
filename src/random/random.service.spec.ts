@@ -29,6 +29,7 @@ const createCatalog = (stations: CatalogStation[]): StationCatalog => ({
   byId: new Map(stations.map((item) => [item.id, item])),
   listItems: stations,
   listItemsByRegionCode: new Map(),
+  listPayloads: new Map(),
 });
 
 describe('RandomService', () => {

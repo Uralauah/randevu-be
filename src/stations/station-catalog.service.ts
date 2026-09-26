@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import {
+  PrecompressedJson,
+  precompressJson,
+} from '../common/http/precompressed-json';
 import { TtlLruCache } from '../common/ttl-lru-cache';
 import { SubwayStation } from './entities';
 
@@ -40,7 +44,13 @@ export interface StationCatalog {
   /** id 오름차순 목록. 응답에 그대로 쓰므로 호출자는 고치지 말아야 한다. */
   listItems: readonly StationListItem[];
   listItemsByRegionCode: ReadonlyMap<string, readonly StationListItem[]>;
+  /** 역 목록 응답 본문. 카탈로그와 함께 만들어지고 함께 버려진다. */
+  listPayloads: Map<string, Promise<PrecompressedJson>>;
 }
+
+const ALL_REGIONS_KEY = '*';
+/** 없는 지역 코드는 모두 빈 목록 하나를 함께 쓴다(입력값마다 응답을 만들어 쌓지 않는다). */
+const UNKNOWN_REGION_KEY = '?';
 
 /**
  * 역·노선 메타데이터를 메모리에 올려 두고 공유한다.
@@ -63,6 +73,37 @@ export class StationCatalogService {
 
   getCatalog(): Promise<StationCatalog> {
     return this.cache.getOrLoad('catalog', () => this.load());
+  }
+
+  /**
+   * GET /stations 응답 본문을 직렬화·압축된 상태로 돌려준다.
+   * 지역마다 처음 요청될 때 한 번 만들고, 카탈로그가 바뀔 때까지 재사용한다.
+   */
+  async getStationListPayload(regionCode?: string): Promise<PrecompressedJson> {
+    const catalog = await this.getCatalog();
+    const normalizedRegionCode = regionCode?.toUpperCase();
+    const key = !normalizedRegionCode
+      ? ALL_REGIONS_KEY
+      : catalog.listItemsByRegionCode.has(normalizedRegionCode)
+        ? normalizedRegionCode
+        : UNKNOWN_REGION_KEY;
+
+    let payload = catalog.listPayloads.get(key);
+
+    if (!payload) {
+      const items =
+        key === ALL_REGIONS_KEY
+          ? catalog.listItems
+          : (catalog.listItemsByRegionCode.get(key) ?? []);
+
+      payload = precompressJson(items).catch((error: unknown) => {
+        catalog.listPayloads.delete(key);
+        throw error;
+      });
+      catalog.listPayloads.set(key, payload);
+    }
+
+    return payload;
   }
 
   /** 역·노선 데이터가 바뀌었을 때 다음 요청에서 다시 읽게 한다. */
@@ -131,6 +172,11 @@ export class StationCatalogService {
       }
     }
 
-    return { byId, listItems, listItemsByRegionCode };
+    return {
+      byId,
+      listItems,
+      listItemsByRegionCode,
+      listPayloads: new Map(),
+    };
   }
 }

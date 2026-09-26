@@ -1,4 +1,5 @@
 import { Repository } from 'typeorm';
+import { gunzipSync } from 'zlib';
 import { SubwayStation } from './entities';
 import { StationCatalogService } from './station-catalog.service';
 
@@ -76,5 +77,24 @@ describe('StationCatalogService', () => {
     service.invalidate();
     await service.getCatalog();
     expect(find).toHaveBeenCalledTimes(2);
+  });
+
+  it('역 목록 응답 본문을 지역 코드 대소문자와 상관없이 같은 것으로 재사용한다', async () => {
+    const lower = await service.getStationListPayload('busan');
+    const upper = await service.getStationListPayload('BUSAN');
+
+    expect(lower).toBe(upper);
+    expect(JSON.parse(gunzipSync(lower.gzip).toString())).toEqual(
+      (await service.getCatalog()).listItemsByRegionCode.get('BUSAN'),
+    );
+  });
+
+  it('없는 지역 코드는 모두 빈 목록 하나를 함께 쓴다', async () => {
+    const first = await service.getStationListPayload('nope');
+    const second = await service.getStationListPayload('anything-else');
+
+    expect(first).toBe(second);
+    expect(first.identity.toString()).toBe('[]');
+    expect((await service.getCatalog()).listPayloads.size).toBe(1);
   });
 });
