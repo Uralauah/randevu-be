@@ -223,7 +223,11 @@ export class BlogDateEventService {
   }
 
   private logDateEventBlogSearchResults(query: string, items: NaverBlogItem[]) {
-    this.logger.log(
+    if (!Logger.isLevelEnabled('debug')) {
+      return;
+    }
+
+    this.logger.debug(
       `날짜 이벤트 블로그 검색 결과: ${JSON.stringify(
         items.map((item) => ({
           검색어: query,
@@ -237,7 +241,11 @@ export class BlogDateEventService {
   private logDateEventExtractedNames(
     events: Array<{ name: string; blogQuery: string }>,
   ) {
-    this.logger.log(
+    if (!Logger.isLevelEnabled('debug')) {
+      return;
+    }
+
+    this.logger.debug(
       `날짜 이벤트 블로그 후보명: ${JSON.stringify(
         events.map((event) => ({
           후보명: event.name,
@@ -252,7 +260,11 @@ export class BlogDateEventService {
     queries: string[],
     places: CandidatePlace[],
   ) {
-    this.logger.log(
+    if (!Logger.isLevelEnabled('debug')) {
+      return;
+    }
+
+    this.logger.debug(
       `날짜 이벤트 로컬 매칭 결과: ${JSON.stringify({
         후보명: eventName,
         검색어: queries.join(' | '),

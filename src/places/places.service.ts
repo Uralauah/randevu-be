@@ -493,7 +493,11 @@ export class PlacesService {
   }
 
   private logDateRecommendationCandidates(places: PlaceResponse[]) {
-    this.logger.log(
+    if (!Logger.isLevelEnabled('debug')) {
+      return;
+    }
+
+    this.logger.debug(
       `날짜 추천 장소 후보: ${JSON.stringify(
         places.map((place) => ({
           장소이름: place.name,
