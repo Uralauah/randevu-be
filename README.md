@@ -85,3 +85,5 @@ curl -X POST -H "x-admin-key: $ADMIN_API_KEY" "$API_URL/stations/travel-time-cac
 ```
 
 재생성 로직을 바꿨다면 `scripts/verify-travel-time-cache.sql`로 이전 결과와 전수 대조합니다.
+
+**부하 테스트** — `scripts/load-test`에 역 추천·역 목록·장소 목록 API 부하 테스트 스크립트가 있습니다. 사용법은 각 스크립트 상단 주석에 있습니다.
