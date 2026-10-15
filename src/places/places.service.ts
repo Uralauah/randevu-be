@@ -29,6 +29,7 @@ import {
   KEYWORD_SEARCH_DISPLAY,
   KEYWORD_SEARCH_DISTANCE_LIMIT_METERS,
   KEYWORD_SEARCH_MAX_QUERY_LENGTH,
+  PLACE_CACHE_MAX_AGE_MS,
   PLACE_CATEGORY_CONFIG,
   PLACE_LIST_CACHE_MAX_ENTRIES,
   PLACE_LIST_CACHE_TTL_MS,
@@ -64,6 +65,9 @@ export class PlacesService {
   private readonly placeListCache = new TtlLruCache<string, PlaceResponse[]>({
     maxEntries: PLACE_LIST_CACHE_MAX_ENTRIES,
     ttlMs: PLACE_LIST_CACHE_TTL_MS,
+    staleTtlMs: PLACE_CACHE_MAX_AGE_MS - PLACE_LIST_CACHE_TTL_MS,
+    onBackgroundRefreshError: (key, error) =>
+      this.logBackgroundRefreshError(key, error),
   });
   private readonly keywordSearchCache = new TtlLruCache<
     string,
@@ -71,6 +75,9 @@ export class PlacesService {
   >({
     maxEntries: KEYWORD_SEARCH_CACHE_MAX_ENTRIES,
     ttlMs: PLACE_LIST_CACHE_TTL_MS,
+    staleTtlMs: PLACE_CACHE_MAX_AGE_MS - PLACE_LIST_CACHE_TTL_MS,
+    onBackgroundRefreshError: (key, error) =>
+      this.logBackgroundRefreshError(key, error),
   });
   private readonly recommendationCache = new TtlLruCache<
     string,
@@ -78,6 +85,9 @@ export class PlacesService {
   >({
     maxEntries: RECOMMENDATION_CACHE_MAX_ENTRIES,
     ttlMs: RECOMMENDATION_CACHE_TTL_MS,
+    staleTtlMs: PLACE_CACHE_MAX_AGE_MS - RECOMMENDATION_CACHE_TTL_MS,
+    onBackgroundRefreshError: (key, error) =>
+      this.logBackgroundRefreshError(key, error),
   });
   /**
    * 최근 응답에 내보낸 장소. 상세 조회 시 DB 저장이 아직 끝나지 않았거나 실패했으면
@@ -692,6 +702,14 @@ export class PlacesService {
    * 장소 영속 캐시 저장은 응답 경로의 임계 지연에 포함될 필요가 없다.
    * (상세 조회 시점에 사용되는 보조 데이터) 백그라운드로 수행해 응답을 먼저 반환한다.
    */
+  private logBackgroundRefreshError(key: string, error: unknown) {
+    this.logger.warn(
+      `장소 캐시 갱신 실패, 이전 결과를 계속 사용: key=${key}, error=${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
   private rememberRecentPlaces(places: PlaceResponse[]) {
     for (const place of places) {
       this.recentPlaces.set(place.placeKey, place);

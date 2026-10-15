@@ -754,6 +754,62 @@ describe('PlacesService', () => {
     );
   });
 
+  it('목록 캐시 유효 시간이 지나도 이전 목록을 바로 주고, 뒤에서 갱신한다', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const waitUntil = async (condition: () => boolean) => {
+      for (let i = 0; i < 50 && !condition(); i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    };
+
+    stationRepository.findOne.mockResolvedValue({
+      id: 51,
+      name: '삼성',
+      lat: 37.5088,
+      lng: 127.0631,
+      region: { name: '서울' },
+    });
+    naverLocalClient.searchLocal.mockResolvedValue([
+      createNaverLocalItem({
+        id: 1,
+        title: '기존 맛집',
+        lat: 37.5089,
+        lng: 127.0632,
+      }),
+    ]);
+
+    await service.findPlacesByStation(51, 'RESTAURANT');
+    const callsPerLoad = naverLocalClient.searchLocal.mock.calls.length;
+
+    // 유효 시간(2시간)이 지난 뒤, 외부 결과가 바뀐 상황
+    now.mockReturnValue(1_000_000 + 2 * 60 * 60 * 1000 + 1);
+    naverLocalClient.searchLocal.mockResolvedValue([
+      createNaverLocalItem({
+        id: 2,
+        title: '새 맛집',
+        lat: 37.5089,
+        lng: 127.0632,
+      }),
+    ]);
+
+    const stale = await service.findPlacesByStation(51, 'RESTAURANT');
+
+    expect(stale.places.map((place) => place.name)).toEqual(['기존 맛집']);
+
+    await waitUntil(
+      () => naverLocalClient.searchLocal.mock.calls.length >= callsPerLoad * 2,
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const refreshed = await service.findPlacesByStation(51, 'RESTAURANT');
+
+    expect(refreshed.places.map((place) => place.name)).toEqual(['새 맛집']);
+    expect(naverLocalClient.searchLocal).toHaveBeenCalledTimes(
+      callsPerLoad * 2,
+    );
+    now.mockRestore();
+  });
+
   describe('findPlaceDetail', () => {
     const storedPlace = (placeKey: string) =>
       ({

@@ -19,6 +19,12 @@ export const NAVER_QUERY_CONCURRENCY = 4;
 export const PLACE_LIST_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 export const RECOMMENDATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 /**
+ * 장소 목록·검색·추천 결과를 쓸 수 있는 최대 기간. 유효 시간이 지난 뒤 이 기간 안에서는
+ * 이전 결과를 바로 주고 뒤에서 갱신해, 만료 직후 첫 사용자가 외부 API 호출(1초 이상)을 기다리지 않게 한다.
+ * 장소 정보는 하루 정도 지난 결과도 쓸 만하다.
+ */
+export const PLACE_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/**
  * 인메모리 캐시 항목 수 상한. 목록 항목 하나는 장소 최대 40개(수십 KB)라
  * 상한이 없으면 키 종류만큼 메모리가 계속 늘어난다.
  */
