@@ -1,7 +1,8 @@
-import { NestFactory } from '@nestjs/core';
+import { HttpAdapterHost, NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { isAllowedOrigin } from './common/cors';
+import { DatabaseExceptionFilter } from './common/filters/database-exception.filter';
 import { resolveLogLevels } from './common/log-levels';
 
 async function bootstrap() {
@@ -24,6 +25,10 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
   });
+
+  app.useGlobalFilters(
+    new DatabaseExceptionFilter(app.get(HttpAdapterHost).httpAdapter),
+  );
 
   app.useGlobalPipes(
     new ValidationPipe({
