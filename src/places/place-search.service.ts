@@ -200,9 +200,7 @@ export class PlaceSearchService {
       address,
       lat: document.y ? Number(document.y) : null,
       lng: document.x ? Number(document.x) : null,
-      distanceMeters: Number.isFinite(distanceMeters as number)
-        ? distanceMeters
-        : null,
+      distanceMeters: Number.isFinite(distanceMeters) ? distanceMeters : null,
       phone: document.phone || null,
       mapLink: placeUrl,
       externalLink: placeUrl,

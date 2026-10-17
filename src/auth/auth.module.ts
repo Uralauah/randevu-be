@@ -9,11 +9,14 @@ import { SocialAuthService } from './social-auth.service';
 import { AccessTokenGuard } from './access-token.guard';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([User, SocialAccount, AuthRefreshToken]),
-  ],
+  imports: [TypeOrmModule.forFeature([User, SocialAccount, AuthRefreshToken])],
   controllers: [AuthController],
-  providers: [AuthService, AuthTokenService, SocialAuthService, AccessTokenGuard],
+  providers: [
+    AuthService,
+    AuthTokenService,
+    SocialAuthService,
+    AccessTokenGuard,
+  ],
   exports: [AuthService, AuthTokenService, AccessTokenGuard],
 })
 export class AuthModule {}

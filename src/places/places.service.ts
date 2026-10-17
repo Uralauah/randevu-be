@@ -756,7 +756,7 @@ export class PlacesService {
       },
     }));
 
-    await this.placeCacheRepository.upsert(rows as any[], ['placeKey']);
+    await this.placeCacheRepository.upsert(rows, ['placeKey']);
   }
 
   private async refreshPlaceTagsIfNeeded(place: PlaceCache) {

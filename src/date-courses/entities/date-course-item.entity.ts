@@ -32,7 +32,12 @@ export class DateCourseItem {
   @Column({ type: 'varchar', length: 120 })
   name!: string;
 
-  @Column({ name: 'category_name', type: 'varchar', length: 200, nullable: true })
+  @Column({
+    name: 'category_name',
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+  })
   categoryName!: string | null;
 
   @Column({ type: 'varchar', length: 250, nullable: true })
@@ -44,16 +49,31 @@ export class DateCourseItem {
   @Column({ type: 'decimal', precision: 10, scale: 7, nullable: true })
   lng!: number | null;
 
-  @Column({ name: 'external_link', type: 'varchar', length: 500, nullable: true })
+  @Column({
+    name: 'external_link',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
   externalLink!: string | null;
 
   @Column({ name: 'map_link', type: 'varchar', length: 500, nullable: true })
   mapLink!: string | null;
 
-  @Column({ name: 'instagram_link', type: 'varchar', length: 500, nullable: true })
+  @Column({
+    name: 'instagram_link',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
   instagramLink!: string | null;
 
-  @Column({ name: 'reservation_link', type: 'varchar', length: 500, nullable: true })
+  @Column({
+    name: 'reservation_link',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
   reservationLink!: string | null;
 
   @Column({ type: 'text', nullable: true })

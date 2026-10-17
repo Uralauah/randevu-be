@@ -68,7 +68,10 @@ export class PlaceTagService {
   ) {
     const blogText = this.normalize(
       blogItems
-        .map((item) => `${this.stripHtml(item.title)} ${this.stripHtml(item.description)}`)
+        .map(
+          (item) =>
+            `${this.stripHtml(item.title)} ${this.stripHtml(item.description)}`,
+        )
         .join(' '),
     );
 
@@ -181,14 +184,7 @@ const BLOG_TAG_KEYWORDS: Record<string, string[]> = {
     '채광',
     '인테리어',
   ],
-  '분위기 좋은': [
-    '분위기',
-    '무드',
-    '데이트',
-    '소개팅',
-    '아늑한',
-    '분위기좋은',
-  ],
+  '분위기 좋은': ['분위기', '무드', '데이트', '소개팅', '아늑한', '분위기좋은'],
   차분한: ['조용한', '차분한', '한적한', '잔잔한', '여유로운', '대화하기좋은'],
   화려한: ['화려한', '핫한', '핫플', '북적', '활기찬'],
   데이트: ['데이트', '소개팅', '커플', '분위기좋은', '예쁜카페'],

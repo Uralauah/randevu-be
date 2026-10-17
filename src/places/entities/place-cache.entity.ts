@@ -30,7 +30,12 @@ export class PlaceCache {
   @Column({ name: 'description', type: 'varchar', length: 500, nullable: true })
   description!: string | null;
 
-  @Column({ name: 'category_name', type: 'varchar', length: 200, nullable: true })
+  @Column({
+    name: 'category_name',
+    type: 'varchar',
+    length: 200,
+    nullable: true,
+  })
   categoryName!: string | null;
 
   @Column({ type: 'varchar', length: 250, nullable: true })
@@ -45,19 +50,39 @@ export class PlaceCache {
   @Column({ type: 'varchar', length: 50, nullable: true })
   phone!: string | null;
 
-  @Column({ name: 'opening_hours', type: 'varchar', length: 100, default: '알 수 없음' })
+  @Column({
+    name: 'opening_hours',
+    type: 'varchar',
+    length: 100,
+    default: '알 수 없음',
+  })
   openingHours!: string;
 
-  @Column({ name: 'external_link', type: 'varchar', length: 500, nullable: true })
+  @Column({
+    name: 'external_link',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
   externalLink!: string | null;
 
   @Column({ name: 'map_link', type: 'varchar', length: 500, nullable: true })
   mapLink!: string | null;
 
-  @Column({ name: 'instagram_link', type: 'varchar', length: 500, nullable: true })
+  @Column({
+    name: 'instagram_link',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
   instagramLink!: string | null;
 
-  @Column({ name: 'reservation_link', type: 'varchar', length: 500, nullable: true })
+  @Column({
+    name: 'reservation_link',
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
   reservationLink!: string | null;
 
   @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
@@ -66,11 +91,13 @@ export class PlaceCache {
   @Column({ name: 'tag_details', type: 'jsonb', default: () => "'[]'::jsonb" })
   tagDetails!: PlaceTagResponse[];
 
+  /** 원본 검색 결과 스냅숏. 기록만 하고 읽지 않는다. */
   @Column({ name: 'raw_local', type: 'jsonb', nullable: true })
-  rawLocal!: any | null;
+  rawLocal!: unknown;
 
+  /** 태그 추론에 쓴 블로그 검색 결과 스냅숏. 기록만 하고 읽지 않는다. */
   @Column({ name: 'raw_blog', type: 'jsonb', nullable: true })
-  rawBlog!: any | null;
+  rawBlog!: unknown;
 
   @Column({ name: 'tag_cached_at', type: 'timestamptz', nullable: true })
   tagCachedAt!: Date | null;
