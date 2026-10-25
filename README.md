@@ -17,7 +17,7 @@
 | ------------ | ------------------------------------------------------------ |
 | Framework    | NestJS 11                                                    |
 | Database     | PostgreSQL · TypeORM                                         |
-| Auth         | 직접 구현한 HS256 JWT · 소셜 로그인 (카카오 · 구글 · 네이버) |
+| Auth         | @nestjs/jwt 기반 HS256 JWT · 소셜 로그인 (카카오 · 구글 · 네이버) |
 | Realtime     | Socket.io WebSocket                                          |
 | External API | 네이버 지역검색 · 네이버 블로그 · 카카오 로컬                |
 

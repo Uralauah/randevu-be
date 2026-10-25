@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { decodeHTML } from 'entities';
 import { BadRequestException } from '@nestjs/common';
 import { SubwayStation } from '../stations/entities';
 import { PlaceResponse } from './places.type';
@@ -28,10 +29,7 @@ export function normalize(value: string) {
 }
 
 export function stripHtml(value: string) {
-  return value
-    .replace(/<[^>]*>/g, '')
-    .replace(/&amp;/g, '&')
-    .trim();
+  return decodeHTML(value.replace(/<[^>]*>/g, '')).trim();
 }
 
 export function truncateForLog(value: string, maxLength: number) {

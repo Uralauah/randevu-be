@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PlaceCache } from './entities';
 import { NaverBlogItem } from './naver-blog.client';
 import { PlaceTagResponse } from './places.type';
+import { stripHtml } from './places.util';
 
 @Injectable()
 export class PlaceTagService {
@@ -69,8 +70,7 @@ export class PlaceTagService {
     const blogText = this.normalize(
       blogItems
         .map(
-          (item) =>
-            `${this.stripHtml(item.title)} ${this.stripHtml(item.description)}`,
+          (item) => `${stripHtml(item.title)} ${stripHtml(item.description)}`,
         )
         .join(' '),
     );
@@ -131,13 +131,6 @@ export class PlaceTagService {
     }
 
     return 'low';
-  }
-
-  private stripHtml(value: string) {
-    return value
-      .replace(/<[^>]*>/g, '')
-      .replace(/&amp;/g, '&')
-      .trim();
   }
 
   private normalize(value: string) {

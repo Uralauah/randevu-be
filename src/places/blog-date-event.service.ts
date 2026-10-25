@@ -342,8 +342,6 @@ export class BlogDateEventService {
     removeEventWords: boolean,
   ) {
     let result = stripHtml(value)
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
       .replace(/[“”]/g, '"')
       .replace(/['']/g, "'")
       .replace(/[()[\]{}<>]/g, ' ')
